@@ -1,6 +1,6 @@
 @echo off
 echo Installing dependencies...
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 echo.
 echo Starting ETL File Loader...
-python -m streamlit run app.py --browser.gatherUsageStats false
+python -m streamlit run app.py
