@@ -1,0 +1,6 @@
+@echo off
+echo Installing dependencies...
+pip install -r requirements.txt
+echo.
+echo Starting ETL File Loader...
+python -m streamlit run app.py --server.headless true
