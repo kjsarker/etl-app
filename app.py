@@ -92,6 +92,9 @@ def build_df(raw: bytes, name: str, meta: dict, has_header: bool, col_names: lis
     else:
         raise ValueError("Unsupported file type.")
 
+    # Always normalize column labels to strings (pandas uses int labels when header=None)
+    df.columns = df.columns.astype(str)
+
     if not has_header and col_names and len(col_names) == len(df.columns):
         df.columns = col_names
 
@@ -416,21 +419,46 @@ with right:
             if not table_name:
                 st.error("Table name is required.")
             else:
-                load_df = df.copy()
+                # Ensure all column labels are strings before any mapping
+                src = df.copy()
+                src.columns = src.columns.astype(str)
 
                 if col_mapping:
-                    drop_cols  = [fc for fc, tc in col_mapping.items() if tc is None]
-                    rename_map = {fc: tc for fc, tc in col_mapping.items() if tc is not None}
-                    load_df = (
-                        load_df
-                        .drop(columns=drop_cols, errors="ignore")
-                        .rename(columns=rename_map)
-                    )
+                    # Validate: no two file columns mapped to the same table column
+                    mapped_targets = [tc for tc in col_mapping.values() if tc is not None]
+                    dupes = {tc for tc in mapped_targets if mapped_targets.count(tc) > 1}
+                    if dupes:
+                        st.error(
+                            f"Duplicate mapping: {sorted(dupes)} are assigned more than once. "
+                            "Each table column can only receive one file column."
+                        )
+                        st.stop()
+
+                    # Validate: at least one column is mapped
+                    if not mapped_targets:
+                        st.error("No columns mapped. Map at least one file column to a table column.")
+                        st.stop()
+
+                    # Build final_df column-by-column from the mapping
+                    final_df = pd.DataFrame()
+                    for file_col, table_col in col_mapping.items():
+                        if table_col is not None:
+                            final_df[table_col] = src[file_col].values
+                else:
+                    final_df = src
+
+                # Replace pandas NA/NaN with None so SQL Server receives proper NULLs
+                final_df = final_df.where(pd.notnull(final_df), None)
+
+                # Debug preview — shown before the insert so the user can verify
+                with st.expander("Preview: columns being inserted", expanded=True):
+                    st.write("**Column names:**", final_df.columns.tolist())
+                    st.dataframe(final_df.head(10), use_container_width=True)
 
                 try:
                     engine = make_engine(st.session_state.db_cs)
-                    with st.spinner(f"Loading {len(load_df):,} rows into {schema}.{table_name}…"):
-                        load_df.to_sql(
+                    with st.spinner(f"Loading {len(final_df):,} rows into {schema}.{table_name}…"):
+                        final_df.to_sql(
                             name=table_name,
                             con=engine,
                             schema=schema,
@@ -438,7 +466,7 @@ with right:
                             index=False,
                             chunksize=1000,
                         )
-                    st.success(f"Loaded **{len(load_df):,} rows** into `{schema}.{table_name}`")
+                    st.success(f"Loaded **{len(final_df):,} rows** into `{schema}.{table_name}`")
                     st.balloons()
                 except Exception as e:
                     st.error(f"Load failed: {e}")
