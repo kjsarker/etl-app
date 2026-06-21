@@ -4,8 +4,10 @@ import chardet
 import csv
 import json
 import io
+import re
 import pyodbc
 import urllib
+from datetime import datetime
 from sqlalchemy import create_engine
 import warnings
 
@@ -111,6 +113,28 @@ def col_summary(df: pd.DataFrame) -> pd.DataFrame:
         }
         for c in df.columns
     ])
+
+
+def extract_date_from_filename(filename: str):
+    """Try to parse a date out of a filename. Returns a date object or None."""
+    stem = filename.rsplit(".", 1)[0]
+    # Ordered from most specific to least
+    patterns = [
+        (r"(\d{4}[-_]\d{2}[-_]\d{2})", ["%Y-%m-%d"]),
+        (r"(\d{8})",                     ["%Y%m%d"]),
+        (r"(\d{2}[-_]\d{2}[-_]\d{4})",  ["%d-%m-%Y", "%m-%d-%Y"]),
+        (r"(\d{4}[-_]\d{2})",            ["%Y-%m"]),
+    ]
+    for pattern, fmts in patterns:
+        m = re.search(pattern, stem)
+        if m:
+            raw = m.group(1).replace("_", "-")
+            for fmt in fmts:
+                try:
+                    return datetime.strptime(raw, fmt).date()
+                except ValueError:
+                    continue
+    return None
 
 
 # ── Database ────────────────────────────────────────────────────────────────────
@@ -394,14 +418,19 @@ with right:
                         h2.markdown("**Table Column**")
                         st.divider()
 
+                        no_header = not st.session_state.get("_has_header", True)
                         col_mapping = {}
                         for i, fc in enumerate(file_cols):
-                            # Auto-select exact match (case-insensitive)
-                            auto_idx = 0
-                            for j, tc in enumerate(tbl_cols, start=1):
-                                if tc.lower() == fc.lower():
-                                    auto_idx = j
-                                    break
+                            if no_header:
+                                # Serial positional mapping: file col i → table col i
+                                auto_idx = (i + 1) if i < len(tbl_cols) else 0
+                            else:
+                                # Name-match mapping (case-insensitive)
+                                auto_idx = 0
+                                for j, tc in enumerate(tbl_cols, start=1):
+                                    if tc.lower() == fc.lower():
+                                        auto_idx = j
+                                        break
 
                             c1, c2, c3 = st.columns([5, 1, 5])
                             c1.markdown(f"`{fc}`")
@@ -415,6 +444,24 @@ with right:
                             )
                             col_mapping[fc] = None if chosen == "— skip —" else chosen
 
+        # ── Extra columns ───────────────────────────────────────────────────
+        st.divider()
+        st.markdown("**Extra Columns (optional)**")
+
+        ec1, ec2 = st.columns(2)
+        add_filename = ec1.checkbox("Add filename as column")
+        filename_col = ec1.text_input("Filename column name", value="source_file", disabled=not add_filename)
+
+        add_filedate = ec2.checkbox("Add date from filename as column")
+        parsed_date = extract_date_from_filename(st.session_state.file_name or "") if add_filedate else None
+        if add_filedate:
+            if parsed_date:
+                ec2.success(f"Date found: **{parsed_date}**")
+            else:
+                ec2.warning("No date pattern found in filename.")
+        filedate_col = ec2.text_input("File date column name", value="file_date", disabled=not add_filedate)
+
+        st.divider()
         if st.button("Load Data →", type="primary", use_container_width=True):
             if not table_name:
                 st.error("Table name is required.")
@@ -434,7 +481,6 @@ with right:
                         )
                         st.stop()
 
-                    # Validate: at least one column is mapped
                     if not mapped_targets:
                         st.error("No columns mapped. Map at least one file column to a table column.")
                         st.stop()
@@ -445,14 +491,22 @@ with right:
                         if table_col is not None:
                             final_df[table_col] = src[file_col].values
                 else:
-                    final_df = src
+                    final_df = src.copy()
+
+                # Append extra columns
+                if add_filename and filename_col:
+                    final_df[filename_col] = st.session_state.file_name
+                if add_filedate and filedate_col:
+                    if parsed_date is None:
+                        st.error("Cannot add file date: no date pattern found in filename.")
+                        st.stop()
+                    final_df[filedate_col] = parsed_date
 
                 # Replace pandas NA/NaN with None so SQL Server receives proper NULLs
                 final_df = final_df.where(pd.notnull(final_df), None)
 
-                # Debug preview — shown before the insert so the user can verify
-                with st.expander("Preview: columns being inserted", expanded=True):
-                    st.write("**Column names:**", final_df.columns.tolist())
+                # Preview before insert
+                with st.expander("Preview: data being inserted", expanded=True):
                     st.dataframe(final_df.head(10), use_container_width=True)
 
                 try:
