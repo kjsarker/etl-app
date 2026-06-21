@@ -115,81 +115,74 @@ def col_summary(df: pd.DataFrame) -> pd.DataFrame:
     ])
 
 
-def extract_date_from_filename(filename: str):
+def extract_date_from_filename(filename: str) -> str | None:
     """
-    Search the filename for any recognised date pattern and return a date object.
-    Tries every format listed, most-specific first, so longer/unambiguous patterns
-    win over shorter ones. Returns None if nothing matches.
+    Search the filename stem for any recognised date pattern and return a
+    yyyy-MM-dd string.  Returns None if nothing matches.
     """
     stem = filename.rsplit(".", 1)[0]
 
-    S = r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)"          # short month
-    L = r"(?:January|February|March|April|May|June|July|August|September|October|November|December)"  # long month
+    S = r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)"
+    L = r"(?:January|February|March|April|May|June|July|August|September|October|November|December)"
 
-    # (regex, strptime_format)  — ordered most-specific → least-specific
+    # (regex, strptime_format) — most-specific first
     PATTERNS = [
-        # ISO with T
-        (r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}",              "%Y-%m-%dT%H:%M:%S"),
-        # datetime with space
-        (r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}",              "%Y-%m-%d %H:%M:%S"),
-        (r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}",                    "%Y-%m-%d %H:%M"),
-        (r"\d{2}-\d{2}-\d{4} \d{2}:\d{2}:\d{2}",              "%m-%d-%Y %H:%M:%S"),
-        (r"\d{2}-\d{2}-\d{4} \d{2}:\d{2}",                    "%m-%d-%Y %H:%M"),
-        (r"\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2}",              "%m/%d/%Y %H:%M:%S"),
-        (r"\d{2}/\d{2}/\d{4} \d{2}:\d{2}",                    "%m/%d/%Y %H:%M"),
-        (r"\d{2}/\d{2}/\d{4} \d{1,2}:\d{2} (?:AM|PM)",        "%m/%d/%Y %I:%M %p"),
-        (r"\d{2}-\d{2}-\d{4} \d{1,2}:\d{2} (?:AM|PM)",        "%m-%d-%Y %I:%M %p"),
-        # date only — 4-digit year
-        (r"\d{4}-\d{2}-\d{2}",                                 "%Y-%m-%d"),
-        (r"\d{4}/\d{2}/\d{2}",                                 "%Y/%m/%d"),
-        (r"\d{4}\.\d{2}\.\d{2}",                               "%Y.%m.%d"),
-        (r"\d{2}-\d{2}-\d{4}",                                 "%m-%d-%Y"),
-        (r"\d{2}/\d{2}/\d{4}",                                 "%m/%d/%Y"),
-        (r"\d{2}\.\d{2}\.\d{4}",                               "%m.%d.%Y"),
-        # date only — 2-digit year
-        (r"\d{2}-\d{2}-\d{2}",                                 "%m-%d-%y"),
-        (r"\d{2}/\d{2}/\d{2}",                                 "%m/%d/%y"),
-        (r"\d{2}\.\d{2}\.\d{2}",                               "%m.%d.%y"),
-        # long month name
-        (L + r" \d{1,2}, \d{4}",                               "%B %d, %Y"),
-        (L + r" \d{1,2} \d{4}",                                "%B %d %Y"),
-        (r"\d{1,2} " + L + r" \d{4}",                         "%d %B %Y"),
-        (r"\d{4}-" + L + r"-\d{2}",                            "%Y-%B-%d"),
-        # short month name
-        (S + r" \d{1,2}, \d{4}",                               "%b %d, %Y"),
-        (S + r" \d{1,2} \d{4}",                                "%b %d %Y"),
-        (r"\d{1,2} " + S + r" \d{4}",                         "%d %b %Y"),
-        (r"\d{2}-" + S + r"-\d{4}",                            "%d-%b-%Y"),
-        (r"\d{2}-" + S + r"-\d{2}",                            "%d-%b-%y"),
-        (r"\d{4}-" + S + r"-\d{2}",                            "%Y-%b-%d"),
+        (r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}",          "%Y-%m-%dT%H:%M:%S"),
+        (r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}",           "%Y-%m-%d %H:%M:%S"),
+        (r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}",                 "%Y-%m-%d %H:%M"),
+        (r"\d{2}-\d{2}-\d{4} \d{2}:\d{2}:\d{2}",           "%m-%d-%Y %H:%M:%S"),
+        (r"\d{2}-\d{2}-\d{4} \d{2}:\d{2}",                 "%m-%d-%Y %H:%M"),
+        (r"\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2}",           "%m/%d/%Y %H:%M:%S"),
+        (r"\d{2}/\d{2}/\d{4} \d{2}:\d{2}",                 "%m/%d/%Y %H:%M"),
+        (r"\d{2}/\d{2}/\d{4} \d{1,2}:\d{2} (?:AM|PM)",     "%m/%d/%Y %I:%M %p"),
+        (r"\d{2}-\d{2}-\d{4} \d{1,2}:\d{2} (?:AM|PM)",     "%m-%d-%Y %I:%M %p"),
+        (r"\d{4}-\d{2}-\d{2}",                              "%Y-%m-%d"),
+        (r"\d{4}/\d{2}/\d{2}",                              "%Y/%m/%d"),
+        (r"\d{4}\.\d{2}\.\d{2}",                            "%Y.%m.%d"),
+        (r"\d{2}-\d{2}-\d{4}",                              "%m-%d-%Y"),
+        (r"\d{2}/\d{2}/\d{4}",                              "%m/%d/%Y"),
+        (r"\d{2}\.\d{2}\.\d{4}",                            "%m.%d.%Y"),
+        (r"\d{2}-\d{2}-\d{2}",                              "%m-%d-%y"),
+        (r"\d{2}/\d{2}/\d{2}",                              "%m/%d/%y"),
+        (r"\d{2}\.\d{2}\.\d{2}",                            "%m.%d.%y"),
+        (L + r" \d{1,2}, \d{4}",                            "%B %d, %Y"),
+        (L + r" \d{1,2} \d{4}",                             "%B %d %Y"),
+        (r"\d{1,2} " + L + r" \d{4}",                      "%d %B %Y"),
+        (r"\d{4}-" + L + r"-\d{2}",                         "%Y-%B-%d"),
+        (S + r" \d{1,2}, \d{4}",                            "%b %d, %Y"),
+        (S + r" \d{1,2} \d{4}",                             "%b %d %Y"),
+        (r"\d{1,2} " + S + r" \d{4}",                      "%d %b %Y"),
+        (r"\d{2}-" + S + r"-\d{4}",                         "%d-%b-%Y"),
+        (r"\d{2}-" + S + r"-\d{2}",                         "%d-%b-%y"),
+        (r"\d{4}-" + S + r"-\d{2}",                         "%Y-%b-%d"),
     ]
 
     for pattern, fmt in PATTERNS:
         m = re.search(pattern, stem, re.IGNORECASE)
         if m:
             raw = m.group(0)
-            # Try as-is, then title-cased (handles JAN → Jan for %b/%B)
             for attempt in (raw, raw.title(), raw.upper()):
                 try:
-                    return datetime.strptime(attempt, fmt).date()
+                    return datetime.strptime(attempt, fmt).strftime("%Y-%m-%d")
                 except ValueError:
                     continue
 
-    # 8-digit compact: try yyyyMMdd then MMddyyyy
-    m = re.search(r"\b\d{8}\b", stem)
+    # 8-digit compact — use (?<!\d)/(?!\d) instead of \b because underscore is
+    # a word character and \b would fail to match after "_" in names like "_20260323"
+    m = re.search(r"(?<!\d)\d{8}(?!\d)", stem)
     if m:
         raw = m.group(0)
         for fmt in ("%Y%m%d", "%m%d%Y"):
             try:
-                return datetime.strptime(raw, fmt).date()
+                return datetime.strptime(raw, fmt).strftime("%Y-%m-%d")
             except ValueError:
                 continue
 
     # 6-digit compact: MMddyy
-    m = re.search(r"\b\d{6}\b", stem)
+    m = re.search(r"(?<!\d)\d{6}(?!\d)", stem)
     if m:
         try:
-            return datetime.strptime(m.group(0), "%m%d%y").date()
+            return datetime.strptime(m.group(0), "%m%d%y").strftime("%Y-%m-%d")
         except ValueError:
             pass
 
@@ -515,11 +508,11 @@ with right:
         if add_filedate:
             _auto_date = extract_date_from_filename(st.session_state.file_name or "")
             if not _auto_date:
-                ec2.warning("No date found in filename — defaulting to today.")
-            # Key tied to filename → resets automatically when a new file is uploaded
-            file_date_val = ec2.date_input(
-                "File date",
-                value=_auto_date or datetime.today().date(),
+                ec2.warning("No date found in filename — enter manually below.")
+            # text_input key tied to filename so it resets when a new file is uploaded
+            file_date_val = ec2.text_input(
+                "File date (yyyy-MM-dd)",
+                value=_auto_date or "",
                 key=f"_filedate_{st.session_state.file_name}",
             )
         else:
