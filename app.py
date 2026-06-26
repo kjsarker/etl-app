@@ -305,9 +305,8 @@ with left:
         st.divider()
 
         # ── Header settings ─────────────────────────────────────────────────
-        st.subheader("Header Settings")
-
-        has_header = st.checkbox(
+        hdr_col, schema_col = st.columns([1, 1])
+        has_header = hdr_col.checkbox(
             "File has a header row",
             key="_has_header",
             help="Uncheck if the first row contains data, not column names.",
@@ -316,22 +315,22 @@ with left:
         custom_col_names = st.session_state.custom_col_names
 
         if not has_header:
-            st.info("No header row. Upload an optional header file to name the columns.")
-            hf = st.file_uploader(
-                "Header file — CSV with one row of column names (optional)",
+            hf = schema_col.file_uploader(
+                "Schema file (optional)",
                 type=["csv", "txt"],
                 key="_header_file",
+                label_visibility="collapsed",
+                help="CSV with one row of column names",
             )
             if hf:
                 try:
                     header_df = pd.read_csv(io.BytesIO(hf.read()))
                     custom_col_names = list(header_df.columns)
                     st.session_state.custom_col_names = custom_col_names
-                    st.success(f"Columns: {', '.join(custom_col_names)}")
+                    schema_col.caption(f"Columns: {', '.join(custom_col_names)}")
                 except Exception as e:
-                    st.error(f"Could not read header file: {e}")
+                    schema_col.error(f"Could not read schema file: {e}")
         else:
-            # Reset custom names when header row is enabled
             if st.session_state.custom_col_names is not None:
                 st.session_state.custom_col_names = None
             custom_col_names = None
