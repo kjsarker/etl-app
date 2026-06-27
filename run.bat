@@ -1,6 +1,10 @@
 @echo off
-echo Installing dependencies...
-python -m pip install -r requirements.txt
-echo.
+if not exist ".venv\Scripts\python.exe" (
+    echo [ERROR] App is not installed yet.
+    echo Please double-click install.bat first.
+    echo.
+    pause
+    exit /b 1
+)
 echo Starting ETL File Loader...
-python -m streamlit run app.py
+.venv\Scripts\python.exe -m streamlit run app.py
