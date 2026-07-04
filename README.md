@@ -3,7 +3,7 @@
 Upload a file, inspect its structure, and load it into a SQL Server database.
 
 **Supported file formats:** CSV, TSV, TXT, Excel (.xlsx / .xls), JSON, Parquet  
-**Supported database:** Microsoft SQL Server
+**Supported destinations:** Microsoft SQL Server, Azure SQL, PostgreSQL, MySQL, Excel, Google Sheets
 
 ---
 

@@ -10,7 +10,6 @@ import streamlit as st
 
 from targets import (
     PROVIDERS,
-    get_google_sheet_headers,
     get_provider_config_schema,
     get_provider_label,
     load_dataframe,
@@ -297,91 +296,9 @@ with right:
 
     st.divider()
     st.subheader("3. Connect & Load")
-
-    target_name = "etl_output"
-    schema_name = None
-    if_exists = "append"
-    write_mode = "append"
-    column_mapping = {}
-
-    if provider_id == "googlesheets":
-        write_mode = st.radio(
-            "Write mode",
-            ["replace", "append"],
-            format_func=lambda value: "Replace sheet contents" if value == "replace" else "Append rows",
-            horizontal=True,
-            key="google_write_mode",
-        )
-        column_mapping = {}
-        if st.session_state.file_df is not None:
-            try:
-                existing_headers = get_google_sheet_headers(config)
-                if write_mode == "append":
-                    st.caption("Append matches the existing sheet headers automatically. You can override the target header names below if needed.")
-                    if existing_headers:
-                        st.caption(f"Existing headers: {', '.join(existing_headers)}")
-                    else:
-                        st.caption("No existing headers found yet; a new header row will be created.")
-                else:
-                    new_headers = [str(c) for c in st.session_state.file_df.columns]
-                    if existing_headers and existing_headers != new_headers:
-                        st.warning(
-                            f"Existing headers {existing_headers} differ from the incoming headers {new_headers}. Replace will overwrite the sheet contents."
-                        )
-            except Exception as exc:
-                st.caption(f"Could not read sheet headers: {exc}")
-                existing_headers = []
-
-            if write_mode == "append":
-                st.caption("Map each source column to an existing sheet header for append mode.")
-                if existing_headers:
-                    for idx, column in enumerate(st.session_state.file_df.columns):
-                        target_options = existing_headers
-                        default_target = str(column) if str(column) in existing_headers else existing_headers[min(idx, len(existing_headers) - 1)]
-                        cols_map = st.columns([1, 1])
-                        with cols_map[0]:
-                            st.text_input(
-                                f"Source header for {column}",
-                                value=str(column),
-                                disabled=True,
-                                key=f"google_column_source_{idx}",
-                            )
-                        with cols_map[1]:
-                            target_header = st.selectbox(
-                                f"Target header for {column}",
-                                target_options,
-                                index=target_options.index(default_target) if default_target in target_options else 0,
-                                key=f"google_column_map_{idx}",
-                            )
-                        column_mapping[str(column)] = target_header
-                else:
-                    st.caption("No existing sheet headers detected yet. Incoming headers will be used.")
-                    for idx, column in enumerate(st.session_state.file_df.columns):
-                        cols_map = st.columns([1, 1])
-                        with cols_map[0]:
-                            st.text_input(
-                                f"Source header for {column}",
-                                value=str(column),
-                                disabled=True,
-                                key=f"google_column_source_{idx}",
-                            )
-                        with cols_map[1]:
-                            st.text_input(
-                                f"Target header for {column}",
-                                value=str(column),
-                                disabled=True,
-                                key=f"google_column_target_{idx}",
-                            )
-                        column_mapping[str(column)] = str(column)
-        else:
-            existing_headers = []
-            column_mapping = {}
-    else:
-        target_name = st.text_input("Target name / table / sheet", placeholder="customers")
-        schema_name = st.text_input("Schema (optional for SQL targets)", placeholder="dbo")
-        if_exists = st.radio("If target already exists", ["append", "replace", "fail"], horizontal=True)
-        write_mode = None
-        column_mapping = {}
+    target_name = st.text_input("Target name / table / sheet", placeholder="customers")
+    schema_name = st.text_input("Schema (optional for SQL targets)", placeholder="dbo")
+    if_exists = st.radio("If target already exists", ["append", "replace", "fail"], horizontal=True)
 
     c1, c2 = st.columns(2)
     if c1.button("Test Connection", use_container_width=True):
@@ -413,26 +330,7 @@ with right:
                     src = st.session_state.file_df.copy()
                     src.columns = src.columns.astype(str)
                     with st.spinner("Writing data to target…"):
-                        if provider_id == "googlesheets":
-                            rows, msg = load_dataframe(
-                                provider_id,
-                                src,
-                                config,
-                                target_name or "etl_output",
-                                write_mode or "append",
-                                schema=schema_name or None,
-                                column_mapping=column_mapping,
-                                write_mode=write_mode or "append",
-                            )
-                        else:
-                            rows, msg = load_dataframe(
-                                provider_id,
-                                src,
-                                config,
-                                target_name or "etl_output",
-                                if_exists,
-                                schema=schema_name or None,
-                            )
+                        rows, msg = load_dataframe(provider_id, src, config, target_name or "etl_output", if_exists, schema=schema_name or None)
                     st.success(f"Loaded {rows:,} rows. {msg}")
                     st.balloons()
                 except Exception as exc:
