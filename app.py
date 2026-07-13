@@ -307,6 +307,42 @@ with right:
     write_mode = "append"
     column_mapping = {}
 
+    st.markdown("**Extra Columns (optional)**")
+    st.caption("Manually opt in to add extra columns captured from the uploaded filename. Applies to every sink.")
+    ec1, ec2 = st.columns(2)
+    add_filename = ec1.checkbox("Add filename as column", key="_add_filename")
+    filename_col = ec1.text_input(
+        "Filename column name", value="source_file", disabled=not add_filename, key="_filename_col"
+    )
+
+    add_filedate = ec2.checkbox("Add file date as column", key="_add_filedate")
+    _auto_date = extract_date_from_filename(st.session_state.file_name or "") if st.session_state.file_name else None
+    if add_filedate and not _auto_date:
+        ec2.warning("No date found in filename — enter it manually.")
+    file_date_val = ec2.text_input(
+        "File date (YYYY-MM-DD)",
+        value=_auto_date or "",
+        disabled=not add_filedate,
+        key=f"_filedate_{st.session_state.file_name}",
+    )
+    filedate_col = ec2.text_input(
+        "File date column name", value="file_date", disabled=not add_filedate, key="_filedate_col"
+    )
+
+    extra_cols = []
+    if add_filename and filename_col:
+        extra_cols.append(filename_col)
+    if add_filedate and filedate_col:
+        extra_cols.append(filedate_col)
+
+    source_columns = (
+        [str(c) for c in st.session_state.file_df.columns] + extra_cols
+        if st.session_state.file_df is not None
+        else []
+    )
+
+    st.divider()
+
     if provider_id == "googlesheets":
         write_mode = st.radio(
             "Write mode",
@@ -326,10 +362,9 @@ with right:
                     else:
                         st.caption("No existing headers found yet; a new header row will be created.")
                 else:
-                    new_headers = [str(c) for c in st.session_state.file_df.columns]
-                    if existing_headers and existing_headers != new_headers:
+                    if existing_headers and existing_headers != source_columns:
                         st.warning(
-                            f"Existing headers {existing_headers} differ from the incoming headers {new_headers}. Replace will overwrite the sheet contents."
+                            f"Existing headers {existing_headers} differ from the incoming headers {source_columns}. Replace will overwrite the sheet contents."
                         )
             except Exception as exc:
                 st.caption(f"Could not read sheet headers: {exc}")
@@ -338,7 +373,7 @@ with right:
             if write_mode == "append":
                 st.caption("Map each source column to an existing sheet header for append mode.")
                 if existing_headers:
-                    for idx, column in enumerate(st.session_state.file_df.columns):
+                    for idx, column in enumerate(source_columns):
                         target_options = existing_headers
                         default_target = str(column) if str(column) in existing_headers else existing_headers[min(idx, len(existing_headers) - 1)]
                         cols_map = st.columns([1, 1])
@@ -359,7 +394,7 @@ with right:
                         column_mapping[str(column)] = target_header
                 else:
                     st.caption("No existing sheet headers detected yet. Incoming headers will be used.")
-                    for idx, column in enumerate(st.session_state.file_df.columns):
+                    for idx, column in enumerate(source_columns):
                         cols_map = st.columns([1, 1])
                         with cols_map[0]:
                             st.text_input(
@@ -407,7 +442,7 @@ with right:
             if target_columns:
                 st.caption(f"Existing table columns: {', '.join(target_columns)}")
                 st.caption("Map each source column to an existing table column for append mode.")
-                for idx, column in enumerate(st.session_state.file_df.columns):
+                for idx, column in enumerate(source_columns):
                     default_target = str(column) if str(column) in target_columns else target_columns[min(idx, len(target_columns) - 1)]
                     cols_map = st.columns([1, 1])
                     with cols_map[0]:
@@ -455,6 +490,10 @@ with right:
                 try:
                     src = st.session_state.file_df.copy()
                     src.columns = src.columns.astype(str)
+                    if add_filename and filename_col:
+                        src[filename_col] = st.session_state.file_name
+                    if add_filedate and filedate_col:
+                        src[filedate_col] = file_date_val
                     with st.spinner("Writing data to target…"):
                         if provider_id == "googlesheets":
                             rows, msg = load_dataframe(
