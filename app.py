@@ -13,10 +13,13 @@ from targets import (
     get_google_sheet_headers,
     get_provider_config_schema,
     get_provider_label,
+    get_table_columns,
     load_dataframe,
     test_connection,
     validate_provider_config,
 )
+
+SQL_PROVIDERS = {"sqlserver", "azuresql", "postgres", "mysql", "databricks"}
 
 warnings.filterwarnings("ignore")
 
@@ -378,10 +381,50 @@ with right:
             column_mapping = {}
     else:
         target_name = st.text_input("Target name / table / sheet", placeholder="customers")
-        schema_name = st.text_input("Schema (optional for SQL targets)", placeholder="dbo")
+        schema_placeholder = "silver" if provider_id == "databricks" else "dbo"
+        schema_help = (
+            "Unity Catalog schema, e.g. silver for a medallion silver table."
+            if provider_id == "databricks"
+            else None
+        )
+        schema_name = st.text_input(
+            "Schema (optional for SQL targets)",
+            placeholder=schema_placeholder,
+            help=schema_help,
+        )
         if_exists = st.radio("If target already exists", ["append", "replace", "fail"], horizontal=True)
         write_mode = None
         column_mapping = {}
+
+        if (
+            provider_id in SQL_PROVIDERS
+            and if_exists == "append"
+            and target_name.strip()
+            and st.session_state.file_df is not None
+            and not validate_provider_config(provider_id, config)
+        ):
+            target_columns = get_table_columns(provider_id, config, target_name, schema=schema_name or None)
+            if target_columns:
+                st.caption(f"Existing table columns: {', '.join(target_columns)}")
+                st.caption("Map each source column to an existing table column for append mode.")
+                for idx, column in enumerate(st.session_state.file_df.columns):
+                    default_target = str(column) if str(column) in target_columns else target_columns[min(idx, len(target_columns) - 1)]
+                    cols_map = st.columns([1, 1])
+                    with cols_map[0]:
+                        st.text_input(
+                            f"Source column for {column}",
+                            value=str(column),
+                            disabled=True,
+                            key=f"sql_column_source_{idx}",
+                        )
+                    with cols_map[1]:
+                        target_col = st.selectbox(
+                            f"Target column for {column}",
+                            target_columns,
+                            index=target_columns.index(default_target),
+                            key=f"sql_column_map_{provider_id}_{target_name}_{idx}",
+                        )
+                    column_mapping[str(column)] = target_col
 
     c1, c2 = st.columns(2)
     if c1.button("Test Connection", use_container_width=True):
@@ -432,6 +475,7 @@ with right:
                                 target_name or "etl_output",
                                 if_exists,
                                 schema=schema_name or None,
+                                column_mapping=column_mapping,
                             )
                     st.success(f"Loaded {rows:,} rows. {msg}")
                     st.balloons()
@@ -442,5 +486,7 @@ with right:
     st.info(
         "Authentication notes:\n"
         "- SQL Server / Azure SQL: use SQL auth or Azure AD password/service principal where supported.\n"
+        "- Databricks: use a Personal Access Token (simplest) or a Service Principal OAuth client ID/secret. "
+        "Leave Schema blank to land data in the 'silver' schema automatically.\n"
         "- Google Sheets: paste a service-account JSON key with spreadsheet access."
     )

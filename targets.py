@@ -16,6 +16,7 @@ PROVIDERS = [
     {"id": "azuresql", "label": "Azure SQL"},
     {"id": "postgres", "label": "PostgreSQL"},
     {"id": "mysql", "label": "MySQL"},
+    {"id": "databricks", "label": "Databricks SQL Warehouse"},
     {"id": "excel", "label": "Excel File"},
     {"id": "googlesheets", "label": "Google Sheets"},
 ]
@@ -67,6 +68,47 @@ def get_google_sheet_headers(config: dict[str, Any]) -> list[str]:
     return [str(value).strip() for value in values[0]]
 
 
+def get_table_columns(provider_id: str, config: dict[str, Any], target_name: str, schema: str | None = None) -> list[str]:
+    target_name = (target_name or "").strip()
+    if not target_name:
+        return []
+
+    if provider_id in {"sqlserver", "azuresql", "postgres", "mysql"}:
+        try:
+            engine = create_engine(build_connection_string(provider_id, config), pool_pre_ping=True)
+            inspector = sa.inspect(engine)
+            if not inspector.has_table(target_name, schema=schema or None):
+                return []
+            return [col["name"] for col in inspector.get_columns(target_name, schema=schema or None)]
+        except Exception:
+            return []
+
+    if provider_id == "databricks":
+        try:
+            catalog = config.get("catalog", "").strip() or "main"
+            schema_part = (schema or "silver").strip() or "silver"
+            full_table = f"`{catalog}`.`{schema_part}`.`{target_name}`"
+            conn = _databricks_connect(config)
+            with conn:
+                cursor = conn.cursor()
+                try:
+                    cursor.execute(f"DESCRIBE TABLE {full_table}")
+                    rows = cursor.fetchall()
+                finally:
+                    cursor.close()
+            columns = []
+            for row in rows:
+                col_name = (row[0] or "").strip()
+                if not col_name or col_name.startswith("#"):
+                    break
+                columns.append(col_name)
+            return columns
+        except Exception:
+            return []
+
+    return []
+
+
 def get_provider_config_schema(provider_id: str) -> list[dict[str, Any]]:
     schemas = {
         "sqlserver": [
@@ -101,6 +143,15 @@ def get_provider_config_schema(provider_id: str) -> list[dict[str, Any]]:
             {"name": "schema", "label": "Schema", "type": "text", "placeholder": ""},
             {"name": "username", "label": "Username", "type": "text", "placeholder": "root"},
             {"name": "password", "label": "Password", "type": "password"},
+        ],
+        "databricks": [
+            {"name": "server_hostname", "label": "Server Hostname", "type": "text", "placeholder": "adb-xxxxxxxxxxxx.xx.azuredatabricks.net"},
+            {"name": "http_path", "label": "HTTP Path (SQL Warehouse)", "type": "text", "placeholder": "/sql/1.0/warehouses/xxxxxxxxxxxxxxxx"},
+            {"name": "catalog", "label": "Catalog", "type": "text", "placeholder": "main"},
+            {"name": "auth_mode", "label": "Authentication", "type": "select", "options": ["token", "oauth_m2m"], "default": "token"},
+            {"name": "token", "label": "Personal Access Token", "type": "password"},
+            {"name": "client_id", "label": "Service Principal Client ID (OAuth)", "type": "text", "placeholder": "for OAuth authentication"},
+            {"name": "client_secret", "label": "Service Principal Client Secret (OAuth)", "type": "password"},
         ],
         "excel": [
             {"name": "output_path", "label": "Output file path", "type": "text", "placeholder": "C:/data/output.xlsx"},
@@ -210,6 +261,22 @@ def validate_provider_config(provider_id: str, config: dict[str, Any]) -> dict[s
             errors["password"] = "Password is required."
         return errors
 
+    if provider_id == "databricks":
+        if not config.get("server_hostname", "").strip():
+            errors["server_hostname"] = "Server hostname is required."
+        if not config.get("http_path", "").strip():
+            errors["http_path"] = "HTTP Path is required."
+        auth_mode = config.get("auth_mode", "token")
+        if auth_mode == "oauth_m2m":
+            if not config.get("client_id", "").strip():
+                errors["client_id"] = "Client ID is required for OAuth."
+            if not config.get("client_secret", "").strip():
+                errors["client_secret"] = "Client secret is required for OAuth."
+        else:
+            if not config.get("token", "").strip():
+                errors["token"] = "Personal access token is required."
+        return errors
+
     if provider_id == "excel":
         if not config.get("output_path", "").strip():
             errors["output_path"] = "Output file path is required."
@@ -223,6 +290,65 @@ def validate_provider_config(provider_id: str, config: dict[str, Any]) -> dict[s
         return errors
 
     return errors
+
+
+def _databricks_connect(config: dict[str, Any]):
+    from databricks import sql as databricks_sql
+
+    server_hostname = config.get("server_hostname", "").strip()
+    http_path = config.get("http_path", "").strip()
+    auth_mode = config.get("auth_mode", "token")
+
+    if auth_mode == "oauth_m2m":
+        from databricks.sdk.core import Config as DatabricksConfig
+        from databricks.sdk.core import oauth_service_principal
+
+        client_id = config.get("client_id", "").strip()
+        client_secret = config.get("client_secret", "").strip()
+
+        def credentials_provider():
+            cfg = DatabricksConfig(
+                host=f"https://{server_hostname}",
+                client_id=client_id,
+                client_secret=client_secret,
+            )
+            return oauth_service_principal(cfg)
+
+        return databricks_sql.connect(
+            server_hostname=server_hostname,
+            http_path=http_path,
+            credentials_provider=credentials_provider,
+        )
+
+    return databricks_sql.connect(
+        server_hostname=server_hostname,
+        http_path=http_path,
+        access_token=config.get("token", "").strip(),
+    )
+
+
+def _databricks_col_type(dtype) -> str:
+    if pd.api.types.is_bool_dtype(dtype):
+        return "BOOLEAN"
+    if pd.api.types.is_integer_dtype(dtype):
+        return "BIGINT"
+    if pd.api.types.is_float_dtype(dtype):
+        return "DOUBLE"
+    if pd.api.types.is_datetime64_any_dtype(dtype):
+        return "TIMESTAMP"
+    return "STRING"
+
+
+def _databricks_sql_literal(value) -> str:
+    if pd.isna(value):
+        return "NULL"
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if hasattr(value, "isoformat"):
+        return f"TIMESTAMP'{value}'"
+    return "'" + str(value).replace("'", "''") + "'"
 
 
 def test_connection(provider_id: str, config: dict[str, Any]) -> tuple[bool, str]:
@@ -245,6 +371,17 @@ def test_connection(provider_id: str, config: dict[str, Any]) -> tuple[bool, str
             with engine.connect() as conn:
                 conn.execute(sa.text("SELECT 1"))
             return True, "Connection successful"
+        except Exception as exc:
+            return False, str(exc)
+
+    if provider_id == "databricks":
+        try:
+            conn = _databricks_connect(config)
+            with conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT 1")
+                cursor.close()
+            return True, "Databricks connection successful"
         except Exception as exc:
             return False, str(exc)
 
@@ -302,6 +439,8 @@ def load_dataframe(
             engine = create_engine(build_connection_string(provider_id, config), pool_pre_ping=True)
             dataframe = dataframe.copy()
             dataframe.columns = dataframe.columns.astype(str)
+            if column_mapping:
+                dataframe = dataframe.rename(columns={k: v for k, v in column_mapping.items() if v})
             dataframe.to_sql(
                 name=target_name,
                 con=engine,
@@ -312,6 +451,51 @@ def load_dataframe(
                 method="multi",
             )
             return len(dataframe), "Load complete"
+        except Exception as exc:
+            raise RuntimeError(str(exc)) from exc
+
+    if provider_id == "databricks":
+        try:
+            catalog = config.get("catalog", "").strip() or "main"
+            schema_part = (schema or "silver").strip() or "silver"
+            table = target_name.strip()
+            full_table = f"`{catalog}`.`{schema_part}`.`{table}`"
+
+            dataframe = dataframe.copy()
+            dataframe.columns = dataframe.columns.astype(str)
+            if column_mapping:
+                dataframe = dataframe.rename(columns={k: v for k, v in column_mapping.items() if v})
+
+            conn = _databricks_connect(config)
+            with conn:
+                cursor = conn.cursor()
+                try:
+                    cursor.execute(f"CREATE SCHEMA IF NOT EXISTS `{catalog}`.`{schema_part}`")
+
+                    if if_exists == "replace":
+                        cursor.execute(f"DROP TABLE IF EXISTS {full_table}")
+                    elif if_exists == "fail":
+                        cursor.execute(f"SHOW TABLES IN `{catalog}`.`{schema_part}` LIKE '{table}'")
+                        if cursor.fetchall():
+                            raise RuntimeError(f"Table {full_table} already exists.")
+
+                    col_defs = ", ".join(
+                        f"`{col}` {_databricks_col_type(dataframe[col].dtype)}" for col in dataframe.columns
+                    )
+                    cursor.execute(f"CREATE TABLE IF NOT EXISTS {full_table} ({col_defs}) USING DELTA")
+
+                    columns_sql = ", ".join(f"`{c}`" for c in dataframe.columns)
+                    chunk_size = 500
+                    rows = dataframe.values.tolist()
+                    for i in range(0, len(rows), chunk_size):
+                        chunk = rows[i : i + chunk_size]
+                        values_sql = ", ".join(
+                            "(" + ", ".join(_databricks_sql_literal(v) for v in row) + ")" for row in chunk
+                        )
+                        cursor.execute(f"INSERT INTO {full_table} ({columns_sql}) VALUES {values_sql}")
+                finally:
+                    cursor.close()
+            return len(dataframe), f"Loaded into {catalog}.{schema_part}.{table} (Delta)"
         except Exception as exc:
             raise RuntimeError(str(exc)) from exc
 
