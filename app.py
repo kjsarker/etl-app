@@ -25,7 +25,7 @@ SQL_PROVIDERS = {"sqlserver", "azuresql", "postgres", "mysql", "databricks"}
 
 warnings.filterwarnings("ignore")
 
-st.set_page_config(page_title="ETL File Loader", page_icon="⚙️", layout="wide")
+st.set_page_config(page_title="One Minute Loader", page_icon="⚙️", layout="wide")
 
 
 def detect_meta(raw: bytes, name: str) -> dict:
@@ -162,9 +162,9 @@ for _k, _v in _defaults.items():
 
 
 if st.session_state.auth_session is None:
-    _, login_col, _ = st.columns([1, 1.1, 1])
+    _, login_col, _ = st.columns([2, 1, 2])
     with login_col:
-        st.title("⚙️ ETL File Loader")
+        st.title("⚙️ One Minute Loader")
         st.caption("Sign in to continue")
 
         tab_signin, tab_signup = st.tabs(["Sign In", "Create Account"])
@@ -233,7 +233,7 @@ with st.sidebar:
         st.session_state.auth_session = None
         st.rerun()
 
-st.title("ETL File Loader")
+st.title("One Minute Loader")
 st.caption("Load files into SQL databases, Excel, or Google Sheets")
 
 left, right = st.columns([1, 1], gap="large")
