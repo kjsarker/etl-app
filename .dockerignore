@@ -1,0 +1,11 @@
+.venv
+__pycache__
+.git
+.pytest_cache
+*.pyc
+tests
+install.bat
+run.bat
+run.ps1
+README.md
+app_new.py
