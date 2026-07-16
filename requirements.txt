@@ -14,3 +14,5 @@ PyMySQL>=1.0.0
 apscheduler>=3.10.0
 databricks-sql-connector>=3.0.0
 databricks-sdk>=0.20.0
+supabase>=2.9.0
+cryptography>=42.0.0

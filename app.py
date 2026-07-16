@@ -8,6 +8,8 @@ import chardet
 import pandas as pd
 import streamlit as st
 
+import auth
+import vault
 from targets import (
     PROVIDERS,
     get_google_sheet_headers,
@@ -152,11 +154,80 @@ _defaults = {
     "db_ok": False,
     "provider_id": "sqlserver",
     "show_preview": False,
+    "auth_session": None,
 }
 for _k, _v in _defaults.items():
     if _k not in st.session_state:
         st.session_state[_k] = _v
 
+
+if st.session_state.auth_session is None:
+    st.title("ETL File Loader")
+    st.caption("Sign in to continue")
+
+    tab_signin, tab_signup = st.tabs(["Sign In", "Create Account"])
+
+    with tab_signin:
+        with st.form("signin_form"):
+            signin_email = st.text_input("Email", key="_signin_email")
+            signin_password = st.text_input("Password", type="password", key="_signin_password")
+            signin_submitted = st.form_submit_button("Sign In", type="primary", use_container_width=True)
+        if signin_submitted:
+            try:
+                result = auth.sign_in(signin_email, signin_password)
+                st.session_state.auth_session = {
+                    "access_token": result.session.access_token,
+                    "refresh_token": result.session.refresh_token,
+                    "user_id": result.user.id,
+                    "email": result.user.email,
+                }
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Sign in failed: {exc}")
+
+    with tab_signup:
+        with st.form("signup_form"):
+            signup_email = st.text_input("Email", key="_signup_email")
+            signup_password = st.text_input("Password", type="password", key="_signup_password")
+            signup_password_confirm = st.text_input(
+                "Confirm Password", type="password", key="_signup_password_confirm"
+            )
+            signup_submitted = st.form_submit_button("Create Account", use_container_width=True)
+        if signup_submitted:
+            if signup_password != signup_password_confirm:
+                st.error("Passwords do not match.")
+            elif len(signup_password) < 8:
+                st.error("Password must be at least 8 characters.")
+            else:
+                try:
+                    result = auth.sign_up(signup_email, signup_password)
+                    if result.session is not None:
+                        st.session_state.auth_session = {
+                            "access_token": result.session.access_token,
+                            "refresh_token": result.session.refresh_token,
+                            "user_id": result.user.id,
+                            "email": result.user.email,
+                        }
+                        st.rerun()
+                    else:
+                        st.success("Account created. Check your email to confirm it, then sign in.")
+                except Exception as exc:
+                    st.error(f"Sign up failed: {exc}")
+
+    st.stop()
+
+with st.sidebar:
+    st.caption(f"Signed in as **{st.session_state.auth_session['email']}**")
+    if st.button("Log out", use_container_width=True):
+        try:
+            auth.sign_out(
+                st.session_state.auth_session["access_token"],
+                st.session_state.auth_session["refresh_token"],
+            )
+        except Exception:
+            pass
+        st.session_state.auth_session = None
+        st.rerun()
 
 st.title("ETL File Loader")
 st.caption("Load files into SQL databases, Excel, or Google Sheets")
@@ -236,8 +307,12 @@ with left:
         df = st.session_state.file_df
         if df is not None:
             st.divider()
-            if st.button("Preview", use_container_width=True, key="_preview_btn"):
-                st.session_state.show_preview = True
+            if st.button(
+                "Hide Preview" if st.session_state.show_preview else "Preview",
+                use_container_width=True,
+                key="_preview_btn",
+            ):
+                st.session_state.show_preview = not st.session_state.show_preview
 
             if st.session_state.show_preview:
                 m1, m2, m3, m4 = st.columns(4)
@@ -282,6 +357,40 @@ with right:
     )
     st.caption("The same uploaded file can now be written to SQL databases, Excel, or Google Sheets.")
 
+    _supa = auth.get_session_client(
+        st.session_state.auth_session["access_token"],
+        st.session_state.auth_session["refresh_token"],
+    )
+    _user_id = st.session_state.auth_session["user_id"]
+
+    try:
+        _saved_connections = vault.list_credentials(_supa, _user_id)
+    except Exception as exc:
+        _saved_connections = []
+        st.caption(f"Could not load saved connections: {exc}")
+    _matching_connections = [c["connection_name"] for c in _saved_connections if c["provider_id"] == provider_id]
+
+    def _load_saved_connection():
+        name = st.session_state.get("_load_conn_select")
+        if not name or name == "— New —":
+            return
+        try:
+            loaded = vault.load_credential(_supa, _user_id, name)
+            if loaded:
+                for f in get_provider_config_schema(loaded["provider_id"]):
+                    st.session_state[f"target_{loaded['provider_id']}_{f['name']}"] = loaded["config"].get(
+                        f["name"], ""
+                    )
+        except Exception as exc:
+            st.error(f"Could not load connection: {exc}")
+
+    st.selectbox(
+        "Load a saved connection",
+        ["— New —"] + _matching_connections,
+        key="_load_conn_select",
+        on_change=_load_saved_connection,
+    )
+
     schema = get_provider_config_schema(provider_id)
     config = {}
     for field in schema:
@@ -307,6 +416,20 @@ with right:
                 key=f"target_{provider_id}_{name}",
             )
         config[name] = value
+
+    save_col1, save_col2 = st.columns([3, 1])
+    save_conn_name = save_col1.text_input(
+        "Save current settings as", placeholder="my_prod_db", key="_save_conn_name"
+    )
+    if save_col2.button("Save", use_container_width=True, key="_save_conn_btn"):
+        if not save_conn_name.strip():
+            st.error("Enter a name for this connection.")
+        else:
+            try:
+                vault.save_credential(_supa, _user_id, save_conn_name.strip(), provider_id, config)
+                st.success(f"Saved '{save_conn_name.strip()}'.")
+            except Exception as exc:
+                st.error(f"Could not save connection: {exc}")
 
     st.divider()
     st.subheader("3. Connect & Load")
