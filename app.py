@@ -162,57 +162,61 @@ for _k, _v in _defaults.items():
 
 
 if st.session_state.auth_session is None:
-    st.title("ETL File Loader")
-    st.caption("Sign in to continue")
+    _, login_col, _ = st.columns([1, 1.1, 1])
+    with login_col:
+        st.title("⚙️ ETL File Loader")
+        st.caption("Sign in to continue")
 
-    tab_signin, tab_signup = st.tabs(["Sign In", "Create Account"])
+        tab_signin, tab_signup = st.tabs(["Sign In", "Create Account"])
 
-    with tab_signin:
-        with st.form("signin_form"):
-            signin_email = st.text_input("Email", key="_signin_email")
-            signin_password = st.text_input("Password", type="password", key="_signin_password")
-            signin_submitted = st.form_submit_button("Sign In", type="primary", use_container_width=True)
-        if signin_submitted:
-            try:
-                result = auth.sign_in(signin_email, signin_password)
-                st.session_state.auth_session = {
-                    "access_token": result.session.access_token,
-                    "refresh_token": result.session.refresh_token,
-                    "user_id": result.user.id,
-                    "email": result.user.email,
-                }
-                st.rerun()
-            except Exception as exc:
-                st.error(f"Sign in failed: {exc}")
-
-    with tab_signup:
-        with st.form("signup_form"):
-            signup_email = st.text_input("Email", key="_signup_email")
-            signup_password = st.text_input("Password", type="password", key="_signup_password")
-            signup_password_confirm = st.text_input(
-                "Confirm Password", type="password", key="_signup_password_confirm"
-            )
-            signup_submitted = st.form_submit_button("Create Account", use_container_width=True)
-        if signup_submitted:
-            if signup_password != signup_password_confirm:
-                st.error("Passwords do not match.")
-            elif len(signup_password) < 8:
-                st.error("Password must be at least 8 characters.")
-            else:
+        with tab_signin:
+            with st.form("signin_form"):
+                signin_email = st.text_input("Email", key="_signin_email")
+                signin_password = st.text_input("Password", type="password", key="_signin_password")
+                signin_submitted = st.form_submit_button(
+                    "Sign In", type="primary", use_container_width=True
+                )
+            if signin_submitted:
                 try:
-                    result = auth.sign_up(signup_email, signup_password)
-                    if result.session is not None:
-                        st.session_state.auth_session = {
-                            "access_token": result.session.access_token,
-                            "refresh_token": result.session.refresh_token,
-                            "user_id": result.user.id,
-                            "email": result.user.email,
-                        }
-                        st.rerun()
-                    else:
-                        st.success("Account created. Check your email to confirm it, then sign in.")
+                    result = auth.sign_in(signin_email, signin_password)
+                    st.session_state.auth_session = {
+                        "access_token": result.session.access_token,
+                        "refresh_token": result.session.refresh_token,
+                        "user_id": result.user.id,
+                        "email": result.user.email,
+                    }
+                    st.rerun()
                 except Exception as exc:
-                    st.error(f"Sign up failed: {exc}")
+                    st.error(f"Sign in failed: {exc}")
+
+        with tab_signup:
+            with st.form("signup_form"):
+                signup_email = st.text_input("Email", key="_signup_email")
+                signup_password = st.text_input("Password", type="password", key="_signup_password")
+                signup_password_confirm = st.text_input(
+                    "Confirm Password", type="password", key="_signup_password_confirm"
+                )
+                signup_submitted = st.form_submit_button("Create Account", use_container_width=True)
+            if signup_submitted:
+                if signup_password != signup_password_confirm:
+                    st.error("Passwords do not match.")
+                elif len(signup_password) < 8:
+                    st.error("Password must be at least 8 characters.")
+                else:
+                    try:
+                        result = auth.sign_up(signup_email, signup_password)
+                        if result.session is not None:
+                            st.session_state.auth_session = {
+                                "access_token": result.session.access_token,
+                                "refresh_token": result.session.refresh_token,
+                                "user_id": result.user.id,
+                                "email": result.user.email,
+                            }
+                            st.rerun()
+                        else:
+                            st.success("Account created. Check your email to confirm it, then sign in.")
+                    except Exception as exc:
+                        st.error(f"Sign up failed: {exc}")
 
     st.stop()
 
