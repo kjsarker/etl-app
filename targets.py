@@ -75,7 +75,7 @@ def get_table_columns(provider_id: str, config: dict[str, Any], target_name: str
 
     if provider_id in {"sqlserver", "azuresql", "postgres", "mysql"}:
         try:
-            engine = create_engine(build_connection_string(provider_id, config), pool_pre_ping=True)
+            engine = create_engine(_sqlalchemy_url(provider_id, config), pool_pre_ping=True)
             inspector = sa.inspect(engine)
             if not inspector.has_table(target_name, schema=schema or None):
                 return []
@@ -87,7 +87,7 @@ def get_table_columns(provider_id: str, config: dict[str, Any], target_name: str
         try:
             catalog = config.get("catalog", "").strip() or "main"
             schema_part = (schema or "silver").strip() or "silver"
-            full_table = f"`{catalog}`.`{schema_part}`.`{target_name}`"
+            full_table = f"{_databricks_ident(catalog)}.{_databricks_ident(schema_part)}.{_databricks_ident(target_name)}"
             conn = _databricks_connect(config)
             with conn:
                 cursor = conn.cursor()
@@ -223,6 +223,15 @@ def build_connection_string(provider_id: str, config: dict[str, Any]) -> str | N
     return None
 
 
+def _sqlalchemy_url(provider_id: str, config: dict[str, Any]) -> str:
+    """SQLAlchemy needs its own URL scheme, not the raw ODBC connection string
+    pyodbc expects, so sqlserver/azuresql get wrapped via the odbc_connect param."""
+    if provider_id in {"sqlserver", "azuresql"}:
+        odbc_str = build_connection_string(provider_id, config)
+        return f"mssql+pyodbc:///?odbc_connect={quote_plus(odbc_str)}"
+    return build_connection_string(provider_id, config)
+
+
 def validate_provider_config(provider_id: str, config: dict[str, Any]) -> dict[str, str]:
     errors: dict[str, str] = {}
 
@@ -290,6 +299,10 @@ def validate_provider_config(provider_id: str, config: dict[str, Any]) -> dict[s
         return errors
 
     return errors
+
+
+def _databricks_ident(name: str) -> str:
+    return "`" + str(name).replace("`", "``") + "`"
 
 
 def _databricks_connect(config: dict[str, Any]):
@@ -367,7 +380,7 @@ def test_connection(provider_id: str, config: dict[str, Any]) -> tuple[bool, str
 
     if provider_id in {"postgres", "mysql"}:
         try:
-            engine = create_engine(build_connection_string(provider_id, config), pool_pre_ping=True)
+            engine = create_engine(_sqlalchemy_url(provider_id, config), pool_pre_ping=True)
             with engine.connect() as conn:
                 conn.execute(sa.text("SELECT 1"))
             return True, "Connection successful"
@@ -436,16 +449,31 @@ def load_dataframe(
 ) -> tuple[int, str]:
     if provider_id in {"sqlserver", "azuresql", "postgres", "mysql"}:
         try:
-            engine = create_engine(build_connection_string(provider_id, config), pool_pre_ping=True)
+            engine = create_engine(_sqlalchemy_url(provider_id, config), pool_pre_ping=True)
             dataframe = dataframe.copy()
             dataframe.columns = dataframe.columns.astype(str)
             if column_mapping:
                 dataframe = dataframe.rename(columns={k: v for k, v in column_mapping.items() if v})
+
+            effective_if_exists = if_exists
+            if if_exists == "truncate":
+                inspector = sa.inspect(engine)
+                if inspector.has_table(target_name, schema=schema or None):
+                    preparer = engine.dialect.identifier_preparer
+                    full_name = (
+                        f"{preparer.quote(schema)}.{preparer.quote(target_name)}"
+                        if schema
+                        else preparer.quote(target_name)
+                    )
+                    with engine.begin() as conn:
+                        conn.execute(sa.text(f"TRUNCATE TABLE {full_name}"))
+                effective_if_exists = "append"
+
             dataframe.to_sql(
                 name=target_name,
                 con=engine,
                 schema=schema or None,
-                if_exists=if_exists,
+                if_exists=effective_if_exists,
                 index=False,
                 chunksize=1000,
                 method="multi",
@@ -459,7 +487,8 @@ def load_dataframe(
             catalog = config.get("catalog", "").strip() or "main"
             schema_part = (schema or "silver").strip() or "silver"
             table = target_name.strip()
-            full_table = f"`{catalog}`.`{schema_part}`.`{table}`"
+            quoted_schema = f"{_databricks_ident(catalog)}.{_databricks_ident(schema_part)}"
+            full_table = f"{quoted_schema}.{_databricks_ident(table)}"
 
             dataframe = dataframe.copy()
             dataframe.columns = dataframe.columns.astype(str)
@@ -470,21 +499,26 @@ def load_dataframe(
             with conn:
                 cursor = conn.cursor()
                 try:
-                    cursor.execute(f"CREATE SCHEMA IF NOT EXISTS `{catalog}`.`{schema_part}`")
+                    cursor.execute(f"CREATE SCHEMA IF NOT EXISTS {quoted_schema}")
 
+                    table_like = table.replace("'", "''")
                     if if_exists == "replace":
                         cursor.execute(f"DROP TABLE IF EXISTS {full_table}")
                     elif if_exists == "fail":
-                        cursor.execute(f"SHOW TABLES IN `{catalog}`.`{schema_part}` LIKE '{table}'")
+                        cursor.execute(f"SHOW TABLES IN {quoted_schema} LIKE '{table_like}'")
                         if cursor.fetchall():
                             raise RuntimeError(f"Table {full_table} already exists.")
+                    elif if_exists == "truncate":
+                        cursor.execute(f"SHOW TABLES IN {quoted_schema} LIKE '{table_like}'")
+                        if cursor.fetchall():
+                            cursor.execute(f"TRUNCATE TABLE {full_table}")
 
                     col_defs = ", ".join(
-                        f"`{col}` {_databricks_col_type(dataframe[col].dtype)}" for col in dataframe.columns
+                        f"{_databricks_ident(col)} {_databricks_col_type(dataframe[col].dtype)}" for col in dataframe.columns
                     )
                     cursor.execute(f"CREATE TABLE IF NOT EXISTS {full_table} ({col_defs}) USING DELTA")
 
-                    columns_sql = ", ".join(f"`{c}`" for c in dataframe.columns)
+                    columns_sql = ", ".join(_databricks_ident(c) for c in dataframe.columns)
                     chunk_size = 500
                     rows = dataframe.values.tolist()
                     for i in range(0, len(rows), chunk_size):

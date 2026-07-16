@@ -151,6 +151,7 @@ _defaults = {
     "custom_col_names": None,
     "db_ok": False,
     "provider_id": "sqlserver",
+    "show_preview": False,
 }
 for _k, _v in _defaults.items():
     if _k not in st.session_state:
@@ -177,6 +178,7 @@ with left:
         st.session_state.file_name = uploaded.name
         st.session_state.file_meta = meta
         st.session_state.custom_col_names = None
+        st.session_state.show_preview = False
         st.session_state["_has_header"] = bool(meta.get("has_header_detected", True))
         if not meta["error"]:
             st.session_state.file_df = build_df(raw, uploaded.name, meta, st.session_state["_has_header"])
@@ -234,35 +236,39 @@ with left:
         df = st.session_state.file_df
         if df is not None:
             st.divider()
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Format", meta["format"])
-            m2.metric("Rows", f"{len(df):,}")
-            m3.metric("Columns", len(df.columns))
-            m4.metric("Encoding", meta["encoding"])
+            if st.button("Preview", use_container_width=True, key="_preview_btn"):
+                st.session_state.show_preview = True
 
-            with st.expander("File Properties", expanded=True):
-                st.dataframe(
-                    pd.DataFrame(
-                        {
-                            "Property": ["Format", "Encoding", "Confidence", "Delimiter", "Has Header"],
-                            "Value": [
-                                meta["format"],
-                                meta["encoding"],
-                                meta["encoding_confidence"],
-                                repr(meta["delimiter"]) if meta.get("delimiter") else "N/A",
-                                str(has_header),
-                            ],
-                        }
-                    ),
-                    use_container_width=True,
-                    hide_index=True,
-                )
+            if st.session_state.show_preview:
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Format", meta["format"])
+                m2.metric("Rows", f"{len(df):,}")
+                m3.metric("Columns", len(df.columns))
+                m4.metric("Encoding", meta["encoding"])
 
-            with st.expander("Column Analysis", expanded=True):
-                st.dataframe(col_summary(df), use_container_width=True, hide_index=True)
+                with st.expander("File Properties", expanded=True):
+                    st.dataframe(
+                        pd.DataFrame(
+                            {
+                                "Property": ["Format", "Encoding", "Confidence", "Delimiter", "Has Header"],
+                                "Value": [
+                                    meta["format"],
+                                    meta["encoding"],
+                                    meta["encoding_confidence"],
+                                    repr(meta["delimiter"]) if meta.get("delimiter") else "N/A",
+                                    str(has_header),
+                                ],
+                            }
+                        ),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
 
-            with st.expander("Data Preview (first 100 rows)"):
-                st.dataframe(df.head(100), use_container_width=True)
+                with st.expander("Column Analysis", expanded=True):
+                    st.dataframe(col_summary(df), use_container_width=True, hide_index=True)
+
+                with st.expander("Data Preview (first 100 rows)"):
+                    st.dataframe(df.head(100), use_container_width=True)
     elif meta and meta["error"]:
         st.error(meta["error"])
 
@@ -290,10 +296,14 @@ with right:
         elif field_type == "textarea":
             value = st.text_area(label, placeholder=field.get("placeholder", ""), key=f"target_{provider_id}_{name}")
         else:
+            is_secret = any(
+                token in name.lower() or token in label.lower()
+                for token in ("password", "secret", "token")
+            )
             value = st.text_input(
                 label,
                 placeholder=field.get("placeholder", ""),
-                type="password" if "password" in label.lower() or name == "password" else "default",
+                type="password" if is_secret else "default",
                 key=f"target_{provider_id}_{name}",
             )
         config[name] = value
@@ -427,13 +437,18 @@ with right:
             placeholder=schema_placeholder,
             help=schema_help,
         )
-        if_exists = st.radio("If target already exists", ["append", "replace", "fail"], horizontal=True)
+        if_exists = st.radio(
+            "If target already exists",
+            ["append", "truncate", "replace", "fail"],
+            horizontal=True,
+            help="append = add rows | truncate = empty the table, then load | replace = drop & recreate table | fail = raise an error",
+        )
         write_mode = None
         column_mapping = {}
 
         if (
             provider_id in SQL_PROVIDERS
-            and if_exists == "append"
+            and if_exists in {"append", "truncate"}
             and target_name.strip()
             and st.session_state.file_df is not None
             and not validate_provider_config(provider_id, config)
@@ -441,7 +456,7 @@ with right:
             target_columns = get_table_columns(provider_id, config, target_name, schema=schema_name or None)
             if target_columns:
                 st.caption(f"Existing table columns: {', '.join(target_columns)}")
-                st.caption("Map each source column to an existing table column for append mode.")
+                st.caption("Map each source column to an existing table column.")
                 for idx, column in enumerate(source_columns):
                     default_target = str(column) if str(column) in target_columns else target_columns[min(idx, len(target_columns) - 1)]
                     cols_map = st.columns([1, 1])
