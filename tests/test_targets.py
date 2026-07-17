@@ -40,12 +40,11 @@ def test_postgres_conn_str_uses_postgresql_prefix():
     assert "db.example.com" in cs
 
 
-def test_excel_target_requires_output_path():
-    errors = targets.validate_provider_config(
-        "excel",
-        {"output_path": ""},
-    )
-    assert "output_path" in errors
+def test_excel_target_has_no_required_fields():
+    # Excel exports build an in-memory file for browser download rather than
+    # writing to a server-side path, so nothing is required up front.
+    errors = targets.validate_provider_config("excel", {})
+    assert errors == {}
 
 
 def test_google_sheets_validation_uses_worksheet_name():

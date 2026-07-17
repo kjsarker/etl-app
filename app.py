@@ -564,12 +564,16 @@ with right:
             placeholder=schema_placeholder,
             help=schema_help,
         )
-        if_exists = st.radio(
-            "If target already exists",
-            ["append", "truncate", "replace", "fail"],
-            horizontal=True,
-            help="append = add rows | truncate = empty the table, then load | replace = drop & recreate table | fail = raise an error",
-        )
+        if provider_id == "excel":
+            if_exists = "append"
+            st.caption("Each load generates a fresh Excel file for you to download — no server-side file is kept.")
+        else:
+            if_exists = st.radio(
+                "If target already exists",
+                ["append", "truncate", "replace", "fail"],
+                horizontal=True,
+                help="append = add rows | truncate = empty the table, then load | replace = drop & recreate table | fail = raise an error",
+            )
         write_mode = None
         column_mapping = {}
 
@@ -638,7 +642,7 @@ with right:
                         src[filedate_col] = file_date_val
                     with st.spinner("Writing data to target…"):
                         if provider_id == "googlesheets":
-                            rows, msg = load_dataframe(
+                            rows, msg, file_bytes = load_dataframe(
                                 provider_id,
                                 src,
                                 config,
@@ -649,7 +653,7 @@ with right:
                                 write_mode=write_mode or "append",
                             )
                         else:
-                            rows, msg = load_dataframe(
+                            rows, msg, file_bytes = load_dataframe(
                                 provider_id,
                                 src,
                                 config,
@@ -659,7 +663,16 @@ with right:
                                 column_mapping=column_mapping,
                             )
                     st.success(f"Loaded {rows:,} rows. {msg}")
-                    st.balloons()
+                    if file_bytes is not None:
+                        st.download_button(
+                            "Download Excel file",
+                            data=file_bytes,
+                            file_name=(config.get("file_name", "").strip() or "etl_output.xlsx"),
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True,
+                        )
+                    else:
+                        st.balloons()
                 except Exception as exc:
                     st.error(f"Load failed: {exc}")
 

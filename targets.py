@@ -1,5 +1,4 @@
 import json
-import os
 import re
 from typing import Any
 
@@ -154,7 +153,7 @@ def get_provider_config_schema(provider_id: str) -> list[dict[str, Any]]:
             {"name": "client_secret", "label": "Service Principal Client Secret (OAuth)", "type": "password"},
         ],
         "excel": [
-            {"name": "output_path", "label": "Output file path", "type": "text", "placeholder": "C:/data/output.xlsx"},
+            {"name": "file_name", "label": "Output file name", "type": "text", "placeholder": "output.xlsx"},
             {"name": "sheet_name", "label": "Sheet name", "type": "text", "placeholder": "Sheet1"},
         ],
         "googlesheets": [
@@ -215,7 +214,7 @@ def build_connection_string(provider_id: str, config: dict[str, Any]) -> str | N
         return f"mysql+pymysql://{quote_plus(username)}:{quote_plus(password)}@{host}:{port}/{database}"
 
     if provider_id == "excel":
-        return config.get("output_path", "").strip()
+        return config.get("file_name", "").strip()
 
     if provider_id == "googlesheets":
         return config.get("spreadsheet_id", "").strip()
@@ -287,8 +286,6 @@ def validate_provider_config(provider_id: str, config: dict[str, Any]) -> dict[s
         return errors
 
     if provider_id == "excel":
-        if not config.get("output_path", "").strip():
-            errors["output_path"] = "Output file path is required."
         return errors
 
     if provider_id == "googlesheets":
@@ -399,14 +396,12 @@ def test_connection(provider_id: str, config: dict[str, Any]) -> tuple[bool, str
             return False, str(exc)
 
     if provider_id == "excel":
-        output_path = config.get("output_path", "").strip()
         try:
-            directory = os.path.dirname(output_path)
-            if directory:
-                os.makedirs(directory, exist_ok=True)
-            pd.DataFrame({"test": [1]}).to_excel(output_path, index=False)
-            os.remove(output_path)
-            return True, "Excel target is ready"
+            import io
+
+            buffer = io.BytesIO()
+            pd.DataFrame({"test": [1]}).to_excel(buffer, index=False)
+            return True, "Excel export is ready — the file downloads to your browser after Load Data."
         except Exception as exc:
             return False, str(exc)
 
@@ -446,7 +441,7 @@ def load_dataframe(
     schema: str | None = None,
     column_mapping: dict[str, str] | None = None,
     write_mode: str = "append",
-) -> tuple[int, str]:
+) -> tuple[int, str, bytes | None]:
     if provider_id in {"sqlserver", "azuresql", "postgres", "mysql"}:
         try:
             engine = create_engine(_sqlalchemy_url(provider_id, config), pool_pre_ping=True)
@@ -478,7 +473,7 @@ def load_dataframe(
                 chunksize=1000,
                 method="multi",
             )
-            return len(dataframe), "Load complete"
+            return len(dataframe), "Load complete", None
         except Exception as exc:
             raise RuntimeError(str(exc)) from exc
 
@@ -529,23 +524,24 @@ def load_dataframe(
                         cursor.execute(f"INSERT INTO {full_table} ({columns_sql}) VALUES {values_sql}")
                 finally:
                     cursor.close()
-            return len(dataframe), f"Loaded into {catalog}.{schema_part}.{table} (Delta)"
+            return len(dataframe), f"Loaded into {catalog}.{schema_part}.{table} (Delta)", None
         except Exception as exc:
             raise RuntimeError(str(exc)) from exc
 
     if provider_id == "excel":
         try:
-            output_path = config.get("output_path", "").strip()
-            directory = os.path.dirname(output_path)
-            if directory:
-                os.makedirs(directory, exist_ok=True)
+            import io
+
             sheet_name = config.get("sheet_name", "Sheet1") or "Sheet1"
-            if if_exists == "replace" and os.path.exists(output_path):
-                os.remove(output_path)
-            writer = pd.ExcelWriter(output_path, engine="openpyxl", mode="a" if os.path.exists(output_path) else "w")
-            dataframe.to_excel(writer, sheet_name=sheet_name, index=False)
-            writer.close()
-            return len(dataframe), "Excel file updated"
+            dataframe = dataframe.copy()
+            dataframe.columns = dataframe.columns.astype(str)
+            if column_mapping:
+                dataframe = dataframe.rename(columns={k: v for k, v in column_mapping.items() if v})
+
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+                dataframe.to_excel(writer, sheet_name=sheet_name, index=False)
+            return len(dataframe), "Excel file generated — download it below.", buffer.getvalue()
         except Exception as exc:
             raise RuntimeError(str(exc)) from exc
 
@@ -590,7 +586,7 @@ def load_dataframe(
                 work_df = aligned_df
                 values = work_df.where(pd.notnull(work_df), "").astype(str).values.tolist()
                 worksheet.append_rows(values, value_input_option="RAW")
-                return len(dataframe), "Google Sheets updated"
+                return len(dataframe), "Google Sheets updated", None
 
             headers = work_df.columns.astype(str).tolist()
             values = work_df.where(pd.notnull(work_df), "").astype(str).values.tolist()
@@ -602,7 +598,7 @@ def load_dataframe(
                     worksheet.update([headers] + values, value_input_option="RAW")
                 else:
                     worksheet.append_rows(values, value_input_option="RAW")
-            return len(dataframe), "Google Sheets updated"
+            return len(dataframe), "Google Sheets updated", None
         except Exception as exc:
             raise RuntimeError(str(exc)) from exc
 
