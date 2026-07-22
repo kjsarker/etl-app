@@ -421,6 +421,17 @@ with right:
             )
         config[name] = value
 
+    if provider_id == "excel":
+        existing_excel_file = st.file_uploader(
+            "Existing Excel file (optional — appends new rows into it)",
+            type=["xlsx"],
+            key="_excel_existing_file",
+            help="Pick a workbook from your computer to add the loaded rows into its matching sheet, "
+            "instead of starting from a blank file. Other sheets in that workbook are kept as-is.",
+        )
+        if existing_excel_file is not None:
+            config["_existing_file_bytes"] = existing_excel_file.read()
+
     save_col1, save_col2 = st.columns([3, 1])
     save_conn_name = save_col1.text_input(
         "Save current settings as", placeholder="my_prod_db", key="_save_conn_name"
@@ -566,7 +577,10 @@ with right:
         )
         if provider_id == "excel":
             if_exists = "append"
-            st.caption("Each load generates a fresh Excel file for you to download — no server-side file is kept.")
+            st.caption(
+                "Generates a fresh Excel file to download — no server-side file is kept. "
+                "Upload an existing workbook below to append into it instead of starting blank."
+            )
         else:
             if_exists = st.radio(
                 "If target already exists",

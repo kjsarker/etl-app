@@ -537,11 +537,33 @@ def load_dataframe(
             dataframe.columns = dataframe.columns.astype(str)
             if column_mapping:
                 dataframe = dataframe.rename(columns={k: v for k, v in column_mapping.items() if v})
+            new_row_count = len(dataframe)
+
+            other_sheets: dict[str, pd.DataFrame] = {}
+            combined = dataframe
+            existing_bytes = config.get("_existing_file_bytes")
+            if existing_bytes:
+                try:
+                    existing_sheets = pd.read_excel(io.BytesIO(existing_bytes), sheet_name=None)
+                except Exception as exc:
+                    raise RuntimeError(f"Could not read the uploaded Excel file: {exc}") from exc
+                existing_target = existing_sheets.pop(sheet_name, None)
+                other_sheets = existing_sheets
+                if existing_target is not None:
+                    existing_target.columns = existing_target.columns.astype(str)
+                    combined = pd.concat([existing_target, dataframe], ignore_index=True)
 
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-                dataframe.to_excel(writer, sheet_name=sheet_name, index=False)
-            return len(dataframe), "Excel file generated — download it below.", buffer.getvalue()
+                for name, sheet_df in other_sheets.items():
+                    sheet_df.to_excel(writer, sheet_name=name, index=False)
+                combined.to_excel(writer, sheet_name=sheet_name, index=False)
+            msg = (
+                f"Added {new_row_count} rows to the '{sheet_name}' sheet — download the merged file below."
+                if existing_bytes
+                else "Excel file generated — download it below."
+            )
+            return new_row_count, msg, buffer.getvalue()
         except Exception as exc:
             raise RuntimeError(str(exc)) from exc
 

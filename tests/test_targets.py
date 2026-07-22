@@ -1,5 +1,8 @@
 import importlib.util
+import io
 from pathlib import Path
+
+import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "targets.py"
@@ -45,6 +48,38 @@ def test_excel_target_has_no_required_fields():
     # writing to a server-side path, so nothing is required up front.
     errors = targets.validate_provider_config("excel", {})
     assert errors == {}
+
+
+def test_excel_load_merges_uploaded_existing_workbook():
+    existing_buffer = io.BytesIO()
+    pd.DataFrame({"a": [1, 2]}).to_excel(existing_buffer, sheet_name="Data", index=False)
+
+    rows, msg, file_bytes = targets.load_dataframe(
+        "excel",
+        pd.DataFrame({"a": [3]}),
+        {"sheet_name": "Data", "_existing_file_bytes": existing_buffer.getvalue()},
+        target_name="Data",
+        if_exists="append",
+    )
+
+    assert rows == 1
+    assert file_bytes is not None
+
+    result = pd.read_excel(io.BytesIO(file_bytes), sheet_name="Data")
+    assert result["a"].tolist() == [1, 2, 3]
+
+
+def test_excel_load_without_existing_file_returns_fresh_bytes():
+    rows, msg, file_bytes = targets.load_dataframe(
+        "excel",
+        pd.DataFrame({"a": [1]}),
+        {"sheet_name": "Data"},
+        target_name="Data",
+        if_exists="append",
+    )
+
+    assert rows == 1
+    assert file_bytes is not None
 
 
 def test_google_sheets_validation_uses_worksheet_name():
