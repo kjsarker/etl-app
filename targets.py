@@ -67,6 +67,25 @@ def get_google_sheet_headers(config: dict[str, Any]) -> list[str]:
     return [str(value).strip() for value in values[0]]
 
 
+def get_excel_existing_sheet(config: dict[str, Any]) -> pd.DataFrame | None:
+    existing_bytes = config.get("_existing_file_bytes")
+    if not existing_bytes:
+        return None
+
+    import io
+
+    sheet_name = config.get("sheet_name", "Sheet1") or "Sheet1"
+    try:
+        sheets = pd.read_excel(io.BytesIO(existing_bytes), sheet_name=None)
+    except Exception:
+        return None
+    sheet = sheets.get(sheet_name)
+    if sheet is None:
+        return None
+    sheet.columns = sheet.columns.astype(str)
+    return sheet
+
+
 def get_table_columns(provider_id: str, config: dict[str, Any], target_name: str, schema: str | None = None) -> list[str]:
     target_name = (target_name or "").strip()
     if not target_name:
@@ -540,7 +559,7 @@ def load_dataframe(
             new_row_count = len(dataframe)
 
             other_sheets: dict[str, pd.DataFrame] = {}
-            combined = dataframe
+            existing_target = None
             existing_bytes = config.get("_existing_file_bytes")
             if existing_bytes:
                 try:
@@ -551,18 +570,25 @@ def load_dataframe(
                 other_sheets = existing_sheets
                 if existing_target is not None:
                     existing_target.columns = existing_target.columns.astype(str)
-                    combined = pd.concat([existing_target, dataframe], ignore_index=True)
+
+            has_existing_rows = existing_target is not None and len(existing_target) > 0
+
+            if if_exists == "append" and has_existing_rows:
+                combined = pd.concat([existing_target, dataframe], ignore_index=True)
+                msg = f"Added {new_row_count} rows to the '{sheet_name}' sheet ({len(combined)} total) — download the merged file below."
+            elif has_existing_rows:
+                combined = dataframe
+                verb = "Cleared" if if_exists == "truncate" else "Replaced"
+                msg = f"{verb} the existing rows in '{sheet_name}' and loaded {new_row_count} new rows — download the file below."
+            else:
+                combined = dataframe
+                msg = "Excel file generated — download it below."
 
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
                 for name, sheet_df in other_sheets.items():
                     sheet_df.to_excel(writer, sheet_name=name, index=False)
                 combined.to_excel(writer, sheet_name=sheet_name, index=False)
-            msg = (
-                f"Added {new_row_count} rows to the '{sheet_name}' sheet — download the merged file below."
-                if existing_bytes
-                else "Excel file generated — download it below."
-            )
             return new_row_count, msg, buffer.getvalue()
         except Exception as exc:
             raise RuntimeError(str(exc)) from exc

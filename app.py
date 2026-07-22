@@ -12,6 +12,7 @@ import auth
 import vault
 from targets import (
     PROVIDERS,
+    get_excel_existing_sheet,
     get_google_sheet_headers,
     get_provider_config_schema,
     get_provider_label,
@@ -576,10 +577,15 @@ with right:
             help=schema_help,
         )
         if provider_id == "excel":
-            if_exists = "append"
+            if_exists = st.radio(
+                "If the sheet already has data",
+                ["append", "truncate", "replace"],
+                horizontal=True,
+                help="append = add rows below existing data | truncate = clear existing rows, then load | replace = discard the sheet and write only the new rows",
+            )
             st.caption(
-                "Generates a fresh Excel file to download — no server-side file is kept. "
-                "Upload an existing workbook below to append into it instead of starting blank."
+                "Upload an existing workbook above to apply this into its matching sheet. "
+                "Without an upload, this always produces a fresh file to download."
             )
         else:
             if_exists = st.radio(
@@ -618,6 +624,37 @@ with right:
                             target_columns,
                             index=target_columns.index(default_target),
                             key=f"sql_column_map_{provider_id}_{target_name}_{idx}",
+                        )
+                    column_mapping[str(column)] = target_col
+
+        if (
+            provider_id == "excel"
+            and if_exists in {"append", "truncate"}
+            and st.session_state.file_df is not None
+        ):
+            existing_sheet = get_excel_existing_sheet(config)
+            if existing_sheet is not None and not existing_sheet.empty:
+                target_columns = [str(c) for c in existing_sheet.columns]
+                st.caption(f"Existing sheet columns: {', '.join(target_columns)}")
+                st.caption("Preview of existing data currently in the sheet:")
+                st.dataframe(existing_sheet.tail(5), use_container_width=True)
+                st.caption("Map each source column to an existing sheet column (auto-matched by name where possible).")
+                for idx, column in enumerate(source_columns):
+                    default_target = str(column) if str(column) in target_columns else target_columns[min(idx, len(target_columns) - 1)]
+                    cols_map = st.columns([1, 1])
+                    with cols_map[0]:
+                        st.text_input(
+                            f"Source column for {column}",
+                            value=str(column),
+                            disabled=True,
+                            key=f"excel_column_source_{idx}",
+                        )
+                    with cols_map[1]:
+                        target_col = st.selectbox(
+                            f"Target column for {column}",
+                            target_columns,
+                            index=target_columns.index(default_target),
+                            key=f"excel_column_map_{idx}",
                         )
                     column_mapping[str(column)] = target_col
 

@@ -69,6 +69,76 @@ def test_excel_load_merges_uploaded_existing_workbook():
     assert result["a"].tolist() == [1, 2, 3]
 
 
+def test_excel_load_truncate_clears_existing_rows():
+    existing_buffer = io.BytesIO()
+    pd.DataFrame({"a": [1, 2]}).to_excel(existing_buffer, sheet_name="Data", index=False)
+
+    rows, msg, file_bytes = targets.load_dataframe(
+        "excel",
+        pd.DataFrame({"a": [9]}),
+        {"sheet_name": "Data", "_existing_file_bytes": existing_buffer.getvalue()},
+        target_name="Data",
+        if_exists="truncate",
+    )
+
+    assert rows == 1
+    result = pd.read_excel(io.BytesIO(file_bytes), sheet_name="Data")
+    assert result["a"].tolist() == [9]
+
+
+def test_excel_load_replace_discards_existing_rows():
+    existing_buffer = io.BytesIO()
+    pd.DataFrame({"a": [1, 2]}).to_excel(existing_buffer, sheet_name="Data", index=False)
+
+    rows, msg, file_bytes = targets.load_dataframe(
+        "excel",
+        pd.DataFrame({"b": [9]}),
+        {"sheet_name": "Data", "_existing_file_bytes": existing_buffer.getvalue()},
+        target_name="Data",
+        if_exists="replace",
+    )
+
+    assert rows == 1
+    result = pd.read_excel(io.BytesIO(file_bytes), sheet_name="Data")
+    assert result["b"].tolist() == [9]
+    assert "a" not in result.columns
+
+
+def test_excel_load_preserves_other_sheets():
+    existing_buffer = io.BytesIO()
+    with pd.ExcelWriter(existing_buffer, engine="openpyxl") as writer:
+        pd.DataFrame({"a": [1]}).to_excel(writer, sheet_name="Data", index=False)
+        pd.DataFrame({"x": [1]}).to_excel(writer, sheet_name="Other", index=False)
+
+    rows, msg, file_bytes = targets.load_dataframe(
+        "excel",
+        pd.DataFrame({"a": [2]}),
+        {"sheet_name": "Data", "_existing_file_bytes": existing_buffer.getvalue()},
+        target_name="Data",
+        if_exists="append",
+    )
+
+    sheets = pd.read_excel(io.BytesIO(file_bytes), sheet_name=None)
+    assert "Other" in sheets
+    assert sheets["Other"]["x"].tolist() == [1]
+
+
+def test_get_excel_existing_sheet_returns_matching_sheet():
+    existing_buffer = io.BytesIO()
+    pd.DataFrame({"a": [1, 2]}).to_excel(existing_buffer, sheet_name="Data", index=False)
+
+    sheet = targets.get_excel_existing_sheet(
+        {"sheet_name": "Data", "_existing_file_bytes": existing_buffer.getvalue()}
+    )
+
+    assert sheet is not None
+    assert sheet["a"].tolist() == [1, 2]
+
+
+def test_get_excel_existing_sheet_returns_none_without_upload():
+    assert targets.get_excel_existing_sheet({"sheet_name": "Data"}) is None
+
+
 def test_excel_load_without_existing_file_returns_fresh_bytes():
     rows, msg, file_bytes = targets.load_dataframe(
         "excel",
