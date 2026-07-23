@@ -26,7 +26,8 @@ SQL_PROVIDERS = {"sqlserver", "azuresql", "postgres", "mysql", "databricks"}
 
 warnings.filterwarnings("ignore")
 
-st.set_page_config(page_title="One Minute Loader", page_icon="⚙️", layout="wide")
+st.set_page_config(page_title="One Minute Loader", page_icon="assets/logo.png", layout="wide")
+st.logo("assets/logo.png", size="large")
 
 
 def detect_meta(raw: bytes, name: str) -> dict:
@@ -165,7 +166,7 @@ for _k, _v in _defaults.items():
 if st.session_state.auth_session is None:
     _, login_col, _ = st.columns([2, 1, 2])
     with login_col:
-        st.title("⚙️ One Minute Loader")
+        st.title("One Minute Loader")
         st.caption("Sign in to continue")
 
         tab_signin, tab_signup = st.tabs(["Sign In", "Create Account"])

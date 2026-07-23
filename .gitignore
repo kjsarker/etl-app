@@ -15,7 +15,7 @@ venv/
 env/
 
 # Streamlit
-.streamlit/
+.streamlit/secrets.toml
 
 # OS
 .DS_Store
