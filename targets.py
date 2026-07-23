@@ -380,6 +380,34 @@ def _databricks_sql_literal(value) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
 
+def _mysql_col_type(dtype) -> str:
+    if pd.api.types.is_bool_dtype(dtype):
+        return "BOOLEAN"
+    if pd.api.types.is_integer_dtype(dtype):
+        return "BIGINT"
+    if pd.api.types.is_float_dtype(dtype):
+        return "DOUBLE"
+    if pd.api.types.is_datetime64_any_dtype(dtype):
+        return "DATETIME"
+    return "TEXT"
+
+
+def _mysql_create_table_ddl(engine: Engine, target_name: str, dataframe: pd.DataFrame, schema: str | None) -> str:
+    preparer = engine.dialect.identifier_preparer
+    full_name = f"{preparer.quote(schema)}.{preparer.quote(target_name)}" if schema else preparer.quote(target_name)
+    col_defs = ", ".join(
+        f"{preparer.quote(str(col))} {_mysql_col_type(dataframe[col].dtype)}" for col in dataframe.columns
+    )
+    pk_col = preparer.quote("id")
+    return f"CREATE TABLE {full_name} ({pk_col} BIGINT AUTO_INCREMENT PRIMARY KEY, {col_defs})"
+
+
+def _create_mysql_table_with_pk(engine: Engine, target_name: str, dataframe: pd.DataFrame, schema: str | None) -> None:
+    ddl = _mysql_create_table_ddl(engine, target_name, dataframe, schema)
+    with engine.begin() as conn:
+        conn.execute(sa.text(ddl))
+
+
 def test_connection(provider_id: str, config: dict[str, Any]) -> tuple[bool, str]:
     errors = validate_provider_config(provider_id, config)
     if errors:
@@ -481,6 +509,25 @@ def load_dataframe(
                     )
                     with engine.begin() as conn:
                         conn.execute(sa.text(f"TRUNCATE TABLE {full_name}"))
+                effective_if_exists = "append"
+
+            if provider_id == "mysql":
+                # Managed MySQL (e.g. Aiven) commonly enforces sql_require_primary_key,
+                # which rejects the plain CREATE TABLE pandas.to_sql would otherwise issue.
+                inspector = sa.inspect(engine)
+                table_exists = inspector.has_table(target_name, schema=schema or None)
+                if effective_if_exists == "replace" and table_exists:
+                    preparer = engine.dialect.identifier_preparer
+                    full_name = (
+                        f"{preparer.quote(schema)}.{preparer.quote(target_name)}"
+                        if schema
+                        else preparer.quote(target_name)
+                    )
+                    with engine.begin() as conn:
+                        conn.execute(sa.text(f"DROP TABLE {full_name}"))
+                    table_exists = False
+                if not table_exists:
+                    _create_mysql_table_with_pk(engine, target_name, dataframe, schema)
                 effective_if_exists = "append"
 
             dataframe.to_sql(

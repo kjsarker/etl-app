@@ -3,6 +3,7 @@ import io
 from pathlib import Path
 
 import pandas as pd
+import sqlalchemy as sa
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "targets.py"
@@ -150,6 +151,29 @@ def test_excel_load_without_existing_file_returns_fresh_bytes():
 
     assert rows == 1
     assert file_bytes is not None
+
+
+def test_mysql_create_table_ddl_includes_auto_increment_primary_key():
+    # Aiven (and other managed MySQL providers) reject CREATE TABLE statements
+    # with no primary key when sql_require_primary_key is set, so new tables
+    # need an explicit auto-increment id column pandas.to_sql wouldn't add.
+    engine = sa.create_engine("mysql+pymysql://user:pass@localhost/db")
+    df = pd.DataFrame({"name": ["a"], "email": ["a@b.com"]})
+
+    ddl = targets._mysql_create_table_ddl(engine, "customer", df, None)
+
+    assert "AUTO_INCREMENT PRIMARY KEY" in ddl
+    assert "customer" in ddl
+    assert "name" in ddl and "email" in ddl
+
+
+def test_mysql_create_table_ddl_qualifies_with_schema():
+    engine = sa.create_engine("mysql+pymysql://user:pass@localhost/db")
+    df = pd.DataFrame({"name": ["a"]})
+
+    ddl = targets._mysql_create_table_ddl(engine, "customer", df, "myschema")
+
+    assert "myschema.customer" in ddl
 
 
 def test_google_sheets_validation_uses_worksheet_name():
