@@ -167,6 +167,18 @@ def test_mysql_create_table_ddl_includes_auto_increment_primary_key():
     assert "name" in ddl and "email" in ddl
 
 
+def test_mysql_create_table_ddl_avoids_colliding_with_existing_id_column():
+    # Source data can legitimately already have an "id" column; the synthetic
+    # primary key column must not collide with it (this broke a real load).
+    engine = sa.create_engine("mysql+pymysql://user:pass@localhost/db")
+    df = pd.DataFrame({"id": [1], "name": ["a"]})
+
+    ddl = targets._mysql_create_table_ddl(engine, "customer", df, None)
+
+    assert ddl.count(" id ") + ddl.count("(id ") == 1
+    assert "_pk_id BIGINT AUTO_INCREMENT PRIMARY KEY" in ddl
+
+
 def test_mysql_create_table_ddl_qualifies_with_schema():
     engine = sa.create_engine("mysql+pymysql://user:pass@localhost/db")
     df = pd.DataFrame({"name": ["a"]})

@@ -398,7 +398,13 @@ def _mysql_create_table_ddl(engine: Engine, target_name: str, dataframe: pd.Data
     col_defs = ", ".join(
         f"{preparer.quote(str(col))} {_mysql_col_type(dataframe[col].dtype)}" for col in dataframe.columns
     )
-    pk_col = preparer.quote("id")
+
+    pk_name = "_pk_id"
+    existing_lower = {str(col).lower() for col in dataframe.columns}
+    while pk_name.lower() in existing_lower:
+        pk_name = "_" + pk_name
+    pk_col = preparer.quote(pk_name)
+
     return f"CREATE TABLE {full_name} ({pk_col} BIGINT AUTO_INCREMENT PRIMARY KEY, {col_defs})"
 
 
