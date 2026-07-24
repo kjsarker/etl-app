@@ -3,7 +3,14 @@ gatherUsageStats = false
 
 [theme]
 base = "dark"
-primaryColor = "#E5484D"
-backgroundColor = "#101C16"
-secondaryBackgroundColor = "#1B2921"
-textColor = "#EAF6EF"
+primaryColor = "#29ABE2"
+backgroundColor = "#0B141C"
+secondaryBackgroundColor = "#113244"
+textColor = "#FFFFFF"
+linkColor = "#29ABE2"
+borderColor = "#164961"
+
+[theme.sidebar]
+backgroundColor = "#0B141C"
+secondaryBackgroundColor = "#113244"
+borderColor = "#164961"

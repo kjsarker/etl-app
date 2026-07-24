@@ -2,6 +2,7 @@ import io
 import json
 import re
 import warnings
+from contextlib import contextmanager
 from datetime import datetime
 
 import chardet
@@ -28,6 +29,64 @@ warnings.filterwarnings("ignore")
 
 st.set_page_config(page_title="One Minute Loader", page_icon="assets/logo.png", layout="wide")
 st.logo("assets/logo.png", size="large")
+
+st.markdown(
+    """
+    <style>
+    @keyframes oml-rotate { to { transform: rotate(360deg); } }
+    .oml-logo{display:inline-flex;align-items:center;gap:14px;margin-bottom:4px;}
+    .oml-tile{width:44px;height:44px;background:#0B141C;border-radius:11px;
+        display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+    .oml-spin{transform-origin:20px 20px;animation:oml-rotate 1.4s linear infinite;}
+    .oml-word{font-weight:800;font-size:26px;letter-spacing:-.02em;line-height:1.1;color:#fff;}
+    .oml-word b{color:#29ABE2;font-weight:800;}
+    .oml-word small{display:block;font-size:13px;font-weight:400;color:#9fb3ab;letter-spacing:0;margin-top:2px;}
+    @media (prefers-reduced-motion: reduce){.oml-spin{animation:none;}}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+def render_brand_header(caption: str | None = None) -> None:
+    caption_html = f"<small>{caption}</small>" if caption else ""
+    st.markdown(
+        f"""
+        <span class="oml-logo">
+            <span class="oml-tile">
+                <svg viewBox="0 0 40 40" fill="none" width="30" height="30">
+                    <circle cx="20" cy="20" r="15" stroke="rgba(41,171,226,.20)" stroke-width="5"/>
+                    <circle class="oml-spin" cx="20" cy="20" r="15" stroke="#29ABE2" stroke-width="5"
+                            stroke-linecap="round" stroke-dasharray="26 200"/>
+                </svg>
+            </span>
+            <span class="oml-word"><b>ONE</b> MINUTE LOADER{caption_html}</span>
+        </span>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+@contextmanager
+def branded_spinner(text: str):
+    placeholder = st.empty()
+    placeholder.markdown(
+        f"""
+        <div style="display:flex;align-items:center;gap:10px;padding:6px 0;">
+            <svg viewBox="0 0 40 40" fill="none" width="20" height="20">
+                <circle cx="20" cy="20" r="15" stroke="rgba(41,171,226,.20)" stroke-width="5"/>
+                <circle class="oml-spin" cx="20" cy="20" r="15" stroke="#29ABE2" stroke-width="5"
+                        stroke-linecap="round" stroke-dasharray="26 200"/>
+            </svg>
+            <span style="color:#FFFFFF;">{text}</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    try:
+        yield
+    finally:
+        placeholder.empty()
 
 
 def detect_meta(raw: bytes, name: str) -> dict:
@@ -166,7 +225,7 @@ for _k, _v in _defaults.items():
 if st.session_state.auth_session is None:
     _, login_col, _ = st.columns([2, 1, 2])
     with login_col:
-        st.title("One Minute Loader")
+        render_brand_header()
         st.caption("Sign in to continue")
 
         tab_signin, tab_signup = st.tabs(["Sign In", "Create Account"])
@@ -235,7 +294,7 @@ with st.sidebar:
         st.session_state.auth_session = None
         st.rerun()
 
-st.title("One Minute Loader")
+render_brand_header()
 st.caption("Load files into SQL databases, Excel, or Google Sheets")
 
 left, right = st.columns([1, 1], gap="large")
@@ -668,7 +727,7 @@ with right:
             if errors:
                 st.error("; ".join(errors.values()))
             else:
-                with st.spinner("Checking target connection…"):
+                with branded_spinner("Checking target connection…"):
                     ok, msg = test_connection(provider_id, config)
                 if ok:
                     st.session_state.db_ok = True
@@ -692,7 +751,7 @@ with right:
                         src[filename_col] = st.session_state.file_name
                     if add_filedate and filedate_col:
                         src[filedate_col] = file_date_val
-                    with st.spinner("Writing data to target…"):
+                    with branded_spinner("Writing data to target…"):
                         if provider_id == "googlesheets":
                             rows, msg, file_bytes = load_dataframe(
                                 provider_id,
