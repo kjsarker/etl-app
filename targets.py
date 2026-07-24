@@ -67,8 +67,108 @@ def get_google_sheet_headers(config: dict[str, Any]) -> list[str]:
     return [str(value).strip() for value in values[0]]
 
 
+def _graph_get_access_token(tenant_id: str, client_id: str, client_secret: str) -> str:
+    import requests
+
+    tenant_id = (tenant_id or "").strip()
+    client_id = (client_id or "").strip()
+    client_secret = (client_secret or "").strip()
+    if not (tenant_id and client_id and client_secret):
+        raise RuntimeError("Tenant ID, Client ID, and Client Secret are required for OneDrive/SharePoint.")
+
+    resp = requests.post(
+        f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token",
+        data={
+            "grant_type": "client_credentials",
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "scope": "https://graph.microsoft.com/.default",
+        },
+        timeout=30,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(f"Could not authenticate with Azure AD: {resp.text}")
+    return resp.json()["access_token"]
+
+
+def _graph_encode_share_url(share_url: str) -> str:
+    import base64
+
+    encoded = base64.urlsafe_b64encode(share_url.strip().encode("utf-8")).decode("utf-8")
+    return "u!" + encoded.rstrip("=")
+
+
+def _graph_resolve_share_link(access_token: str, share_link: str) -> tuple[str, str]:
+    import requests
+
+    share_link = (share_link or "").strip()
+    if not share_link:
+        raise RuntimeError("A OneDrive/SharePoint file link is required.")
+
+    encoded = _graph_encode_share_url(share_link)
+    resp = requests.get(
+        f"https://graph.microsoft.com/v1.0/shares/{encoded}/driveItem",
+        headers={"Authorization": f"Bearer {access_token}"},
+        params={"$select": "id,parentReference"},
+        timeout=30,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(f"Could not resolve the OneDrive/SharePoint link: {resp.text}")
+    item = resp.json()
+    return item["parentReference"]["driveId"], item["id"]
+
+
+def _graph_download_item_bytes(access_token: str, drive_id: str, item_id: str) -> bytes:
+    import requests
+
+    resp = requests.get(
+        f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{item_id}/content",
+        headers={"Authorization": f"Bearer {access_token}"},
+        timeout=60,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(f"Could not download the OneDrive/SharePoint file: {resp.text}")
+    return resp.content
+
+
+def _graph_upload_item_bytes(access_token: str, drive_id: str, item_id: str, content: bytes) -> None:
+    import requests
+
+    resp = requests.put(
+        f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{item_id}/content",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/octet-stream",
+        },
+        data=content,
+        timeout=60,
+    )
+    if resp.status_code not in (200, 201):
+        raise RuntimeError(f"Could not save the file back to OneDrive/SharePoint: {resp.text}")
+
+
+def _excel_cloud_fetch(config: dict[str, Any]) -> tuple[str, str, str, bytes | None]:
+    """Authenticate against Graph and resolve the share link once, returning
+    (access_token, drive_id, item_id, existing_file_bytes_or_None) so callers
+    can reuse the same drive/item id for the follow-up upload."""
+    token = _graph_get_access_token(
+        config.get("tenant_id", ""), config.get("client_id", ""), config.get("client_secret", "")
+    )
+    drive_id, item_id = _graph_resolve_share_link(token, config.get("share_link", ""))
+    try:
+        existing_bytes = _graph_download_item_bytes(token, drive_id, item_id)
+    except Exception:
+        existing_bytes = None
+    return token, drive_id, item_id, existing_bytes
+
+
 def get_excel_existing_sheet(config: dict[str, Any]) -> pd.DataFrame | None:
     existing_bytes = config.get("_existing_file_bytes")
+    if not existing_bytes and config.get("location") == "OneDrive / SharePoint":
+        try:
+            _, _, _, existing_bytes = _excel_cloud_fetch(config)
+        except Exception:
+            return None
     if not existing_bytes:
         return None
 
@@ -172,8 +272,19 @@ def get_provider_config_schema(provider_id: str) -> list[dict[str, Any]]:
             {"name": "client_secret", "label": "Service Principal Client Secret (OAuth)", "type": "password"},
         ],
         "excel": [
+            {
+                "name": "location",
+                "label": "File location",
+                "type": "select",
+                "options": ["Local file", "OneDrive / SharePoint"],
+                "default": "Local file",
+            },
             {"name": "file_name", "label": "Output file name", "type": "text", "placeholder": "output.xlsx"},
             {"name": "sheet_name", "label": "Sheet name", "type": "text", "placeholder": "Sheet1"},
+            {"name": "share_link", "label": "OneDrive/SharePoint file link", "type": "text", "placeholder": "https://yourtenant-my.sharepoint.com/:x:/g/personal/.../EX..."},
+            {"name": "tenant_id", "label": "Azure AD Tenant ID", "type": "text", "placeholder": ""},
+            {"name": "client_id", "label": "Azure AD App Client ID", "type": "text", "placeholder": ""},
+            {"name": "client_secret", "label": "Azure AD App Client Secret", "type": "password"},
         ],
         "googlesheets": [
             {"name": "spreadsheet_id", "label": "Spreadsheet ID or URL", "type": "text", "placeholder": "1AbCd..."},
@@ -305,6 +416,15 @@ def validate_provider_config(provider_id: str, config: dict[str, Any]) -> dict[s
         return errors
 
     if provider_id == "excel":
+        if config.get("location") == "OneDrive / SharePoint":
+            if not config.get("tenant_id", "").strip():
+                errors["tenant_id"] = "Azure AD Tenant ID is required."
+            if not config.get("client_id", "").strip():
+                errors["client_id"] = "Azure AD App Client ID is required."
+            if not config.get("client_secret", "").strip():
+                errors["client_secret"] = "Azure AD App Client Secret is required."
+            if not config.get("share_link", "").strip():
+                errors["share_link"] = "OneDrive/SharePoint file link is required."
         return errors
 
     if provider_id == "googlesheets":
@@ -449,6 +569,12 @@ def test_connection(provider_id: str, config: dict[str, Any]) -> tuple[bool, str
             return False, str(exc)
 
     if provider_id == "excel":
+        if config.get("location") == "OneDrive / SharePoint":
+            try:
+                _excel_cloud_fetch(config)
+                return True, "Connected to the OneDrive/SharePoint file successfully."
+            except Exception as exc:
+                return False, str(exc)
         try:
             import io
 
@@ -604,6 +730,7 @@ def load_dataframe(
         try:
             import io
 
+            is_cloud = config.get("location") == "OneDrive / SharePoint"
             sheet_name = config.get("sheet_name", "Sheet1") or "Sheet1"
             dataframe = dataframe.copy()
             dataframe.columns = dataframe.columns.astype(str)
@@ -613,12 +740,17 @@ def load_dataframe(
 
             other_sheets: dict[str, pd.DataFrame] = {}
             existing_target = None
-            existing_bytes = config.get("_existing_file_bytes")
+            token = drive_id = item_id = None
+            if is_cloud:
+                token, drive_id, item_id, existing_bytes = _excel_cloud_fetch(config)
+            else:
+                existing_bytes = config.get("_existing_file_bytes")
+
             if existing_bytes:
                 try:
                     existing_sheets = pd.read_excel(io.BytesIO(existing_bytes), sheet_name=None)
                 except Exception as exc:
-                    raise RuntimeError(f"Could not read the uploaded Excel file: {exc}") from exc
+                    raise RuntimeError(f"Could not read the existing Excel file: {exc}") from exc
                 existing_target = existing_sheets.pop(sheet_name, None)
                 other_sheets = existing_sheets
                 if existing_target is not None:
@@ -628,21 +760,26 @@ def load_dataframe(
 
             if if_exists == "append" and has_existing_rows:
                 combined = pd.concat([existing_target, dataframe], ignore_index=True)
-                msg = f"Added {new_row_count} rows to the '{sheet_name}' sheet ({len(combined)} total) — download the merged file below."
+                base_msg = f"Added {new_row_count} rows to the '{sheet_name}' sheet ({len(combined)} total)"
             elif has_existing_rows:
                 combined = dataframe
                 verb = "Cleared" if if_exists == "truncate" else "Replaced"
-                msg = f"{verb} the existing rows in '{sheet_name}' and loaded {new_row_count} new rows — download the file below."
+                base_msg = f"{verb} the existing rows in '{sheet_name}' and loaded {new_row_count} new rows"
             else:
                 combined = dataframe
-                msg = "Excel file generated — download it below."
+                base_msg = "Excel file generated"
 
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
                 for name, sheet_df in other_sheets.items():
                     sheet_df.to_excel(writer, sheet_name=name, index=False)
                 combined.to_excel(writer, sheet_name=sheet_name, index=False)
-            return new_row_count, msg, buffer.getvalue()
+            file_content = buffer.getvalue()
+
+            if is_cloud:
+                _graph_upload_item_bytes(token, drive_id, item_id, file_content)
+                return new_row_count, f"{base_msg} — saved back to the OneDrive/SharePoint file.", None
+            return new_row_count, f"{base_msg} — download the file below.", file_content
         except Exception as exc:
             raise RuntimeError(str(exc)) from exc
 

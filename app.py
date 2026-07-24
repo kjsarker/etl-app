@@ -462,6 +462,12 @@ with right:
         name = field["name"]
         label = field["label"]
         field_type = field.get("type", "text")
+        if provider_id == "excel":
+            location = config.get("location", "Local file")
+            if name == "file_name" and location != "Local file":
+                continue
+            if name in {"tenant_id", "client_id", "client_secret", "share_link"} and location != "OneDrive / SharePoint":
+                continue
         if field_type == "select":
             options = field.get("options", [])
             default = field.get("default", options[0] if options else "")
@@ -483,15 +489,21 @@ with right:
         config[name] = value
 
     if provider_id == "excel":
-        existing_excel_file = st.file_uploader(
-            "Existing Excel file (optional — appends new rows into it)",
-            type=["xlsx"],
-            key="_excel_existing_file",
-            help="Pick a workbook from your computer to add the loaded rows into its matching sheet, "
-            "instead of starting from a blank file. Other sheets in that workbook are kept as-is.",
-        )
-        if existing_excel_file is not None:
-            config["_existing_file_bytes"] = existing_excel_file.read()
+        if config.get("location") == "OneDrive / SharePoint":
+            st.caption(
+                "The app authenticates with the Azure AD app above and reads/writes the linked file's "
+                "matching sheet directly — no upload or download needed."
+            )
+        else:
+            existing_excel_file = st.file_uploader(
+                "Existing Excel file (optional — appends new rows into it)",
+                type=["xlsx"],
+                key="_excel_existing_file",
+                help="Pick a workbook from your computer to add the loaded rows into its matching sheet, "
+                "instead of starting from a blank file. Other sheets in that workbook are kept as-is.",
+            )
+            if existing_excel_file is not None:
+                config["_existing_file_bytes"] = existing_excel_file.read()
 
     save_col1, save_col2 = st.columns([3, 1])
     save_conn_name = save_col1.text_input(
@@ -520,23 +532,25 @@ with right:
     st.caption("Manually opt in to add extra columns captured from the uploaded filename. Applies to every sink.")
     ec1, ec2 = st.columns(2)
     add_filename = ec1.checkbox("Add filename as column", key="_add_filename")
-    filename_col = ec1.text_input(
-        "Filename column name", value="source_file", disabled=not add_filename, key="_filename_col"
-    )
+    filename_col = "source_file"
+    if add_filename:
+        filename_col = ec1.text_input("Filename column name", value="source_file", key="_filename_col")
 
     add_filedate = ec2.checkbox("Add file date as column", key="_add_filedate")
-    _auto_date = extract_date_from_filename(st.session_state.file_name or "") if st.session_state.file_name else None
-    if add_filedate and not _auto_date:
-        ec2.warning("No date found in filename — enter it manually.")
-    file_date_val = ec2.text_input(
-        "File date (YYYY-MM-DD)",
-        value=_auto_date or "",
-        disabled=not add_filedate,
-        key=f"_filedate_{st.session_state.file_name}",
-    )
-    filedate_col = ec2.text_input(
-        "File date column name", value="file_date", disabled=not add_filedate, key="_filedate_col"
-    )
+    file_date_val = ""
+    filedate_col = "file_date"
+    if add_filedate:
+        _auto_date = (
+            extract_date_from_filename(st.session_state.file_name or "") if st.session_state.file_name else None
+        )
+        if not _auto_date:
+            ec2.warning("No date found in filename — enter it manually.")
+        file_date_val = ec2.text_input(
+            "File date (YYYY-MM-DD)",
+            value=_auto_date or "",
+            key=f"_filedate_{st.session_state.file_name}",
+        )
+        filedate_col = ec2.text_input("File date column name", value="file_date", key="_filedate_col")
 
     extra_cols = []
     if add_filename and filename_col:
@@ -643,10 +657,13 @@ with right:
                 horizontal=True,
                 help="append = add rows below existing data | truncate = clear existing rows, then load | replace = discard the sheet and write only the new rows",
             )
-            st.caption(
-                "Upload an existing workbook above to apply this into its matching sheet. "
-                "Without an upload, this always produces a fresh file to download."
-            )
+            if config.get("location") == "OneDrive / SharePoint":
+                st.caption("This applies to the linked OneDrive/SharePoint file's matching sheet.")
+            else:
+                st.caption(
+                    "Upload an existing workbook above to apply this into its matching sheet. "
+                    "Without an upload, this always produces a fresh file to download."
+                )
         else:
             if_exists = st.radio(
                 "If target already exists",
@@ -793,5 +810,8 @@ with right:
         "- SQL Server / Azure SQL: use SQL auth or Azure AD password/service principal where supported.\n"
         "- Databricks: use a Personal Access Token (simplest) or a Service Principal OAuth client ID/secret. "
         "Leave Schema blank to land data in the 'silver' schema automatically.\n"
-        "- Google Sheets: paste a service-account JSON key with spreadsheet access."
+        "- Google Sheets: paste a service-account JSON key with spreadsheet access.\n"
+        "- Excel (OneDrive/SharePoint): register an Azure AD app with Application permission "
+        "Files.ReadWrite.All (admin-consented), then use its Tenant ID, Client ID, and Client Secret "
+        "with a sharing link to the target file."
     )
